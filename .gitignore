@@ -1,1 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Environment
 .env
+
+# Excel files
+*.xlsx
+*.xls
+!quotations_template.xlsx
+!quotations_template_lite.xlsx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+*.log
+
+# Temporary files
+/tmp/
+*.tmp
+
+# Bot service
+bot-service/__pycache__/
+bot-service/*.pyc
+
+# Parser service
+parser-service/__pycache__/
+parser-service/*.pyc
+parser-service/parser_logic/__pycache__/
