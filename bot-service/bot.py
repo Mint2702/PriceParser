@@ -15,17 +15,45 @@ from telegram.ext import (
 from datetime import datetime
 from pathlib import Path
 import uuid
+from functools import wraps
 
 WAITING_FOR_FILE, WAITING_FOR_DATE = range(2)
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+ALLOWED_USER_IDS_STR = os.getenv('ALLOWED_USER_IDS', '')
 JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
 CONSUMER_GROUP = 'bot-service'
 
 redis_client = None
+
+ALLOWED_USER_IDS = set()
+if ALLOWED_USER_IDS_STR:
+    try:
+        ALLOWED_USER_IDS = set(int(uid.strip()) for uid in ALLOWED_USER_IDS_STR.split(',') if uid.strip())
+    except ValueError:
+        print("⚠️  Warning: Invalid ALLOWED_USER_IDS format. Bot will be accessible to everyone.")
+
+
+def authorized_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        username = update.effective_user.username or "Unknown"
+        
+        if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+            print(f"⛔ Unauthorized access attempt by user {user_id} (@{username})")
+            await update.message.reply_text(
+                "🚫 У вас нет доступа к этому боту.\n\n"
+                "Если вы считаете, что это ошибка, свяжитесь с администратором."
+            )
+            return
+        
+        return await func(update, context, *args, **kwargs)
+    
+    return wrapper
 
 
 async def get_redis():
@@ -39,6 +67,7 @@ async def get_redis():
     return redis_client
 
 
+@authorized_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Добро пожаловать в бот парсинга цен акций!\n\n"
@@ -50,6 +79,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@authorized_only
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 Как использовать бот:\n\n"
@@ -62,6 +92,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@authorized_only
 async def parse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📁 Пожалуйста, отправьте мне Excel файл (шаблон котировок) для обработки."
@@ -241,6 +272,11 @@ def main():
     if not BOT_TOKEN:
         print("Error: TELEGRAM_BOT_TOKEN environment variable not set")
         return
+    
+    if ALLOWED_USER_IDS:
+        print(f"🔒 Bot is restricted to {len(ALLOWED_USER_IDS)} authorized user(s)")
+    else:
+        print("⚠️  WARNING: Bot is accessible to EVERYONE. Set ALLOWED_USER_IDS to restrict access.")
     
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
