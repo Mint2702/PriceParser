@@ -27,6 +27,11 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
     
     ws.cell(1, 4).value = date
     
+    if not ws.cell(2, 17).value:
+        ws.cell(2, 17).value = "Количество сделок"
+    if not ws.cell(2, 18).value:
+        ws.cell(2, 18).value = "Объем торгов"
+    
     target_date = format_date_for_api(date)
     
     row_num = 4
@@ -143,6 +148,11 @@ async def run_async_version(input_path: Path, output_path: Path, date: datetime,
     ws = wb.active
     
     ws.cell(1, 4).value = date
+    
+    if not ws.cell(2, 17).value:
+        ws.cell(2, 17).value = "Количество сделок"
+    if not ws.cell(2, 18).value:
+        ws.cell(2, 18).value = "Объем торгов"
     
     target_date = format_date_for_api(date)
     

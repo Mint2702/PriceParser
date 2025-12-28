@@ -40,6 +40,8 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
     from parser_logic.async_impl import parse_moex_stock_async, get_investing_price_async
     
     moex_price = None
+    num_trades = None
+    volume = None
     investing_price = None
     
     if ticker:
@@ -49,6 +51,8 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
                 for entry in results:
                     if entry.get('date') == target_date:
                         moex_price = entry.get('close_price')
+                        num_trades = entry.get('num_trades')
+                        volume = entry.get('volume')
                         break
         except Exception as e:
             print(f"  [{index}] {stock_name} - MOEX error: {e}", file=sys.stderr)
@@ -59,7 +63,7 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
         except Exception as e:
             print(f"  [{index}] {stock_name} - Investing.com error: {e}", file=sys.stderr)
     
-    return row_num, stock_name, ticker, moex_price, investing_price
+    return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price
 
 
 async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes, str]:
@@ -74,6 +78,11 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
         ws = wb.active
         
         ws.cell(1, 4).value = date
+        
+        if not ws.cell(2, 17).value:
+            ws.cell(2, 17).value = "Количество сделок"
+        if not ws.cell(2, 18).value:
+            ws.cell(2, 18).value = "Объем торгов"
         
         target_date = format_date_for_api(date)
         
@@ -132,13 +141,15 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                     print(f"  [{batch_start + i + 1}] Error: {result}", file=sys.stderr)
                     continue
                 
-                row_num, stock_name, ticker, moex_price, investing_price = result
+                row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price = result
                 
                 print(f"  [{batch_start + i + 1}] {stock_name} ({ticker})")
                 
                 if moex_price is not None:
                     ws.cell(row_num, 5).value = moex_price
-                    print(f"    MOEX: ✓ {moex_price} RUB")
+                    ws.cell(row_num, 17).value = num_trades
+                    ws.cell(row_num, 18).value = volume
+                    print(f"    MOEX: ✓ {moex_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
                     print(f"    MOEX: ✗ Not found")
