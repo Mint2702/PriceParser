@@ -278,7 +278,16 @@ def main():
     else:
         print("⚠️  WARNING: Bot is accessible to EVERYONE. Set ALLOWED_USER_IDS to restrict access.")
     
-    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
+        .build()
+    )
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('parse', parse_command)],
