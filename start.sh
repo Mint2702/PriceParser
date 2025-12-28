@@ -24,7 +24,15 @@ fi
 
 echo "✅ Environment configured"
 echo ""
-echo "🐳 Starting Docker containers..."
+echo "🛑 Stopping and removing old containers..."
+docker-compose down
+
+echo ""
+echo "🧹 Cleaning up old images and containers..."
+docker-compose rm -f
+
+echo ""
+echo "🐳 Building and starting Docker containers..."
 docker-compose up --build -d
 
 echo ""
