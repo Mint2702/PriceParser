@@ -71,8 +71,8 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
                 
                 if moex_price is not None:
                     ws.cell(row_num, 5).value = moex_price
-                    ws.cell(row_num, 17).value = num_trades
-                    ws.cell(row_num, 18).value = volume
+                    ws.cell(row_num, 17).value = num_trades if num_trades is not None else 0
+                    ws.cell(row_num, 18).value = volume if volume is not None else 0
                     print(f"✓ {moex_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
@@ -217,8 +217,8 @@ async def run_async_version(input_path: Path, output_path: Path, date: datetime,
             
             if moex_price is not None:
                 ws.cell(row_num, 5).value = moex_price
-                ws.cell(row_num, 17).value = num_trades
-                ws.cell(row_num, 18).value = volume
+                ws.cell(row_num, 17).value = num_trades if num_trades is not None else 0
+                ws.cell(row_num, 18).value = volume if volume is not None else 0
                 print(f"    MOEX: ✓ {moex_price} RUB (trades: {num_trades}, vol: {volume})")
                 successful_moex += 1
             else:
