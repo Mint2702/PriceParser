@@ -147,8 +147,8 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                 
                 if moex_price is not None:
                     ws.cell(row_num, 5).value = moex_price
-                    ws.cell(row_num, 17).value = num_trades if num_trades is not None else 0
-                    ws.cell(row_num, 18).value = volume if volume is not None else 0
+                    ws.cell(row_num, 19).value = num_trades if num_trades is not None else 0
+                    ws.cell(row_num, 20).value = volume if volume is not None else 0
                     print(f"    MOEX: ✓ {moex_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
