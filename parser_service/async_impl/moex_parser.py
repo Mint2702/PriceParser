@@ -21,7 +21,6 @@ async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
 
         data = response.text.split("(")[1].split(")")[0]
         data = json.loads(data)[1]
-        print(data)
 
         results = []
         history = data["history"]
