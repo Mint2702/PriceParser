@@ -1,4 +1,4 @@
-import json
+import asyncio
 import re
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
@@ -37,7 +37,13 @@ async def get_stock_data_async(stock_id: int, start_date: str, end_date: str) ->
             headers={"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7", "Domain-Id": "ru"}
         )
 
-        data = response.json()['data']
+        data = response.json().get('data', [])
+
+        # Check if data is iterable (i.e., list or tuple), otherwise return an empty list.
+        if not isinstance(data, (list, tuple)):
+            print(f"Error in parsing investing.com data: data is not iterable: {data}")
+            return []
+
         results = []
         for row in data:
             date = row['rowDate']
@@ -52,6 +58,7 @@ async def get_stock_data_async(stock_id: int, start_date: str, end_date: str) ->
 
 async def get_investing_price_async(stock_url: str, target_date: str) -> float | None:
     stock_id = await get_stock_id_async(stock_url)
+    await asyncio.sleep(0.5)
     results = await get_stock_data_async(stock_id, target_date, target_date)
     if results:
         return results[0].get('close_price')

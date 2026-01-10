@@ -208,6 +208,8 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                 
                 if usd_rate is not None:
                     ws.cell(row_num, 7).value = usd_rate
+            
+            await asyncio.sleep(0.3)
         
         print("\n" + "=" * 80)
         summary = (
