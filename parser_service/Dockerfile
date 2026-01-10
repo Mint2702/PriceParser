@@ -10,8 +10,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY __init__.py .
 COPY parser_worker.py .
-COPY parser_logic/ parser_logic/
+COPY async_impl/ async_impl/
+COPY sync/ sync/
 
 CMD ["python", "parser_worker.py"]
 
