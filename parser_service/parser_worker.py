@@ -7,6 +7,8 @@ from pathlib import Path
 from datetime import datetime
 import traceback
 import openpyxl
+import xml.etree.ElementTree as ET
+from curl_cffi.requests import AsyncSession
 from async_impl import parse_moex_stock_async, get_investing_price_async
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
@@ -34,6 +36,31 @@ async def get_redis():
 
 def format_date_for_api(date: datetime) -> str:
     return date.strftime('%Y-%m-%d')
+
+
+async def get_usd_rate_from_cbr(date: datetime) -> float | None:
+    try:
+        date_str = date.strftime('%d/%m/%Y')
+        url = f"https://cbr.ru/scripts/XML_daily.asp?date_req={date_str}"
+        
+        async with AsyncSession() as client:
+            response = await client.get(url, timeout=30, impersonate="chrome120")
+            response.raise_for_status()
+            
+            root = ET.fromstring(response.content)
+            
+            for valute in root.findall('Valute'):
+                char_code = valute.find('CharCode')
+                if char_code is not None and char_code.text == 'USD':
+                    value = valute.find('Value')
+                    if value is not None and value.text:
+                        usd_rate = float(value.text.replace(',', '.'))
+                        return usd_rate
+            
+            return None
+    except Exception as e:
+        print(f"Error fetching USD rate from CBR: {e}", file=sys.stderr)
+        return None
 
 
 async def process_single_stock_async(row_num: int, stock_name: str, ticker: str, investing_url: str, 
@@ -96,6 +123,13 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
             ws.cell(2, 18).value = "Объем торгов"
         
         target_date = format_date_for_api(date)
+        
+        print(f"Fetching USD exchange rate from CBR...")
+        usd_rate = await get_usd_rate_from_cbr(date)
+        if usd_rate:
+            print(f"USD rate: {usd_rate} RUB")
+        else:
+            print(f"Warning: Could not fetch USD rate from CBR", file=sys.stderr)
         
         stocks_data = []
         row_num = 4
@@ -171,6 +205,9 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                     successful_investing += 1
                 else:
                     print(f"    Investing.com: ✗ Not found")
+                
+                if usd_rate is not None:
+                    ws.cell(row_num, 7).value = usd_rate
         
         print("\n" + "=" * 80)
         summary = (
