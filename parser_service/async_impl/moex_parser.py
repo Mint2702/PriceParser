@@ -8,7 +8,7 @@ async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
     from_date = (date_obj - timedelta(days=30)).strftime('%Y-%m-%d')
     till_date = (date_obj + timedelta(days=1)).strftime('%Y-%m-%d')
     
-    url = f"https://iss.moex.com/iss/history/engines/otc/markets/shares/boardgroups/1258/securities/{ticker}-RM.jsonp?iss.meta=off&iss.json=extended&callback=JSON_CALLBACK&lang=ru&from={from_date}&till={till_date}&start=0&limit=100&sort_column=TRADEDATE&sort_order=desc"
+    url = f"https://iss.moex.com/iss/history/engines/otc/markets/shares/boardgroups/1258/securities/{ticker}-RM.jsonp?iss.meta=off&iss.json=extended&callback=JSON_CALLBACK&lang=ru&from={from_date}&till={till_date}&start=0&limit=20&sort_column=TRADEDATE&sort_order=desc"
 
     async with AsyncSession() as client:
         response = await client.get(
@@ -21,6 +21,7 @@ async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
 
         data = response.text.split("(")[1].split(")")[0]
         data = json.loads(data)[1]
+        print(data)
 
         results = []
         history = data["history"]
@@ -29,7 +30,7 @@ async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
             close_price = row["CLOSE"]
             trade_date = row["TRADEDATE"]
             num_trades = row["NUMTRADES"]
-            volume = row["VOLUME"]
+            volume = row["VALUE"]
             results.append({
                 'short_name': short_name,
                 'close_price': close_price,

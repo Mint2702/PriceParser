@@ -34,9 +34,9 @@ services:
       - 8.8.8.8
       - 8.8.4.4
 
-  parser-service:
+  parser_service:
     build:
-      context: ./parser-service
+      context: ./parser_service
       dockerfile: Dockerfile
     container_name: priceparser-worker
     environment:

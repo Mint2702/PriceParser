@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "parser_service"))
+
 import argparse
 import asyncio
 import openpyxl
 from datetime import datetime
-from pathlib import Path
+from sync import parse_moex_stock, get_stock_id, get_stock_data
+from async_impl import parse_moex_stock_async, get_investing_price_async
 
 
 def parse_date(date_str: str) -> datetime:
@@ -19,8 +24,6 @@ def format_date_for_api(date: datetime) -> str:
 
 
 def run_sync_version(input_path: Path, output_path: Path, date: datetime):
-    from src.sync import parse_moex_stock, get_stock_id, get_stock_data
-    
     print(f"Loading Excel file: {input_path}")
     wb = openpyxl.load_workbook(input_path)
     ws = wb.active
@@ -113,8 +116,6 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
 
 async def process_single_stock_async(row_num: int, stock_name: str, ticker: str, investing_url: str, 
                                     target_date: str, index: int):
-    from src.async_impl import parse_moex_stock_async, get_investing_price_async
-    
     moex_price = None
     num_trades = None
     volume = None

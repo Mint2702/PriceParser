@@ -7,14 +7,13 @@ from pathlib import Path
 from datetime import datetime
 import traceback
 import openpyxl
-
-sys.path.insert(0, str(Path(__file__).parent))
+from async_impl import parse_moex_stock_async, get_investing_price_async
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
-CONSUMER_GROUP = 'parser-service'
+CONSUMER_GROUP = 'parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 10))
 
 redis_client = None
@@ -37,8 +36,6 @@ def format_date_for_api(date: datetime) -> str:
 
 async def process_single_stock_async(row_num: int, stock_name: str, ticker: str, investing_url: str, 
                                     target_date: str, index: int):
-    from parser_logic.async_impl import parse_moex_stock_async, get_investing_price_async
-    
     moex_price = None
     num_trades = None
     volume = None

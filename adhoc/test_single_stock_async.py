@@ -4,14 +4,11 @@ Debug script to test parsing a single stock using async methods.
 Useful for testing and debugging the async parsers.
 """
 import sys
+
 import asyncio
 import argparse
-from pathlib import Path
 from datetime import datetime
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.async_impl import parse_moex_stock_async, get_stock_id_async, get_stock_data_async, get_investing_price_async
+from parser_service.async_impl import parse_moex_stock_async, get_stock_id_async, get_stock_data_async, get_investing_price_async
 
 
 def parse_date(date_str: str) -> str:

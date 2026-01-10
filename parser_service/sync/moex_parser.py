@@ -25,7 +25,7 @@ def parse_moex_stock(ticker: str, target_date: str) -> list[dict]:
         close_price = row["CLOSE"]
         trade_date = row["TRADEDATE"]
         num_trades = row["NUMTRADES"]
-        volume = row["VOLUME"]
+        volume = row["VALUE"]
         results.append({
             'short_name': short_name,
             'close_price': close_price,
