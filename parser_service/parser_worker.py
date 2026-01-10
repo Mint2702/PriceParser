@@ -15,6 +15,8 @@ JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
 CONSUMER_GROUP = 'parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 10))
+INVESTING_MAX_RETRIES = int(os.getenv('INVESTING_MAX_RETRIES', 3))
+INVESTING_RETRY_DELAY = float(os.getenv('INVESTING_RETRY_DELAY', 2.0))
 
 redis_client = None
 
@@ -55,10 +57,22 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
             print(f"  [{index}] {stock_name} - MOEX error: {e}", file=sys.stderr)
     
     if investing_url and moex_price is not None:
-        try:
-            investing_price = await get_investing_price_async(investing_url, target_date)
-        except Exception as e:
-            print(f"  [{index}] {stock_name} - Investing.com error: {e}", file=sys.stderr)
+        for attempt in range(INVESTING_MAX_RETRIES):
+            try:
+                investing_price = await get_investing_price_async(investing_url, target_date)
+                if investing_price is not None:
+                    break
+                if attempt < INVESTING_MAX_RETRIES - 1:
+                    delay = INVESTING_RETRY_DELAY * (2 ** attempt)
+                    print(f"  [{index}] {stock_name} - Investing.com returned None, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})", file=sys.stderr)
+                    await asyncio.sleep(delay)
+            except Exception as e:
+                if attempt < INVESTING_MAX_RETRIES - 1:
+                    delay = INVESTING_RETRY_DELAY * (2 ** attempt)
+                    print(f"  [{index}] {stock_name} - Investing.com error: {e}, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})", file=sys.stderr)
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"  [{index}] {stock_name} - Investing.com error after {INVESTING_MAX_RETRIES} attempts: {e}", file=sys.stderr)
     
     return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price
 
