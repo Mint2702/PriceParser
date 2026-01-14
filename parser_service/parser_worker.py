@@ -190,6 +190,8 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                 
                 print(f"  [{batch_start + i + 1}] {stock_name} ({ticker})")
                 
+                ws.cell(row_num, 4).value = date.strftime('%d.%m.%Y')
+                
                 if moex_price is not None:
                     ws.cell(row_num, 5).value = moex_price
                     ws.cell(row_num, 19).value = num_trades if num_trades is not None else 0
