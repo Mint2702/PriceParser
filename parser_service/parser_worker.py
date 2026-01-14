@@ -115,7 +115,7 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
         wb = openpyxl.load_workbook(temp_input)
         ws = wb.active
         
-        ws.cell(1, 4).value = date
+        ws.cell(1, 4).value = date.strftime('%d.%m.%Y')
         
         if not ws.cell(2, 17).value:
             ws.cell(2, 17).value = "Количество сделок"
