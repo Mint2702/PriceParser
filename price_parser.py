@@ -23,6 +23,30 @@ def format_date_for_api(date: datetime) -> str:
     return date.strftime('%Y-%m-%d')
 
 
+def normalize_price(price) -> float | None:
+    if price is None:
+        return None
+    
+    if isinstance(price, (int, float)):
+        return float(price)
+    
+    if isinstance(price, str):
+        price = price.strip()
+        
+        if ',' in price:
+            price = price.replace('.', '')
+            price = price.replace(',', '.')
+        elif price.count('.') > 1:
+            price = price.replace('.', '')
+        
+        try:
+            return float(price)
+        except ValueError:
+            return None
+    
+    return None
+
+
 def run_sync_version(input_path: Path, output_path: Path, date: datetime):
     print(f"Loading Excel file: {input_path}")
     wb = openpyxl.load_workbook(input_path)
@@ -73,10 +97,11 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
                             break
                 
                 if moex_price is not None:
-                    ws.cell(row_num, 5).value = moex_price
+                    normalized_price = normalize_price(moex_price)
+                    ws.cell(row_num, 5).value = normalized_price
                     ws.cell(row_num, 17).value = num_trades if num_trades is not None else 0
                     ws.cell(row_num, 18).value = volume if volume is not None else 0
-                    print(f"✓ {moex_price} RUB (trades: {num_trades}, vol: {volume})")
+                    print(f"✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
                     print("✗ Not found")
@@ -93,8 +118,9 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
                     investing_price = results[0].get('close_price')
                 
                 if investing_price is not None:
-                    ws.cell(row_num, 6).value = investing_price
-                    print(f"✓ ${investing_price}")
+                    normalized_price = normalize_price(investing_price)
+                    ws.cell(row_num, 6).value = normalized_price
+                    print(f"✓ ${normalized_price}")
                     successful_investing += 1
                 else:
                     print("✗ Not found")
@@ -217,17 +243,19 @@ async def run_async_version(input_path: Path, output_path: Path, date: datetime,
             print(f"  [{batch_start + i + 1}] {stock_name} ({ticker})")
             
             if moex_price is not None:
-                ws.cell(row_num, 5).value = moex_price
+                normalized_price = normalize_price(moex_price)
+                ws.cell(row_num, 5).value = normalized_price
                 ws.cell(row_num, 17).value = num_trades if num_trades is not None else 0
                 ws.cell(row_num, 18).value = volume if volume is not None else 0
-                print(f"    MOEX: ✓ {moex_price} RUB (trades: {num_trades}, vol: {volume})")
+                print(f"    MOEX: ✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                 successful_moex += 1
             else:
                 print(f"    MOEX: ✗ Not found")
             
             if investing_price is not None:
-                ws.cell(row_num, 6).value = investing_price
-                print(f"    Investing.com: ✓ ${investing_price}")
+                normalized_price = normalize_price(investing_price)
+                ws.cell(row_num, 6).value = normalized_price
+                print(f"    Investing.com: ✓ ${normalized_price}")
                 successful_investing += 1
             else:
                 print(f"    Investing.com: ✗ Not found")

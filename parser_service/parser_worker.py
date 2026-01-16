@@ -38,6 +38,30 @@ def format_date_for_api(date: datetime) -> str:
     return date.strftime('%Y-%m-%d')
 
 
+def normalize_price(price) -> float | None:
+    if price is None:
+        return None
+    
+    if isinstance(price, (int, float)):
+        return float(price)
+    
+    if isinstance(price, str):
+        price = price.strip()
+        
+        if ',' in price:
+            price = price.replace('.', '')
+            price = price.replace(',', '.')
+        elif price.count('.') > 1:
+            price = price.replace('.', '')
+        
+        try:
+            return float(price)
+        except ValueError:
+            return None
+    
+    return None
+
+
 async def get_usd_rate_from_cbr(date: datetime) -> float | None:
     try:
         date_str = date.strftime('%d/%m/%Y')
@@ -193,17 +217,19 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                 ws.cell(row_num, 4).value = date.strftime('%d.%m.%Y')
                 
                 if moex_price is not None:
-                    ws.cell(row_num, 5).value = moex_price
+                    normalized_price = normalize_price(moex_price)
+                    ws.cell(row_num, 5).value = normalized_price
                     ws.cell(row_num, 19).value = num_trades if num_trades is not None else 0
                     ws.cell(row_num, 20).value = volume if volume is not None else 0
-                    print(f"    MOEX: ✓ {moex_price} RUB (trades: {num_trades}, vol: {volume})")
+                    print(f"    MOEX: ✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
                     print(f"    MOEX: ✗ Not found")
                 
                 if investing_price is not None:
-                    ws.cell(row_num, 6).value = investing_price
-                    print(f"    Investing.com: ✓ ${investing_price}")
+                    normalized_price = normalize_price(investing_price)
+                    ws.cell(row_num, 6).value = normalized_price
+                    print(f"    Investing.com: ✓ ${normalized_price}")
                     successful_investing += 1
                 else:
                     print(f"    Investing.com: ✗ Not found")
