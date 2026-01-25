@@ -141,10 +141,10 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
         
         ws.cell(1, 4).value = date.strftime('%d.%m.%Y')
         
-        if not ws.cell(2, 17).value:
-            ws.cell(2, 17).value = "Количество сделок"
-        if not ws.cell(2, 18).value:
-            ws.cell(2, 18).value = "Объем торгов"
+        if not ws.cell(2, 11).value:
+            ws.cell(2, 11).value = "Количество сделок"
+        if not ws.cell(2, 12).value:
+            ws.cell(2, 12).value = "Объем торгов"
         
         target_date = format_date_for_api(date)
         
@@ -162,6 +162,15 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
             isin = ws.cell(row_num, 2).value
             if not isin:
                 break
+            
+            col_e = ws.cell(row_num, 5).value
+            col_f = ws.cell(row_num, 6).value
+            col_h = ws.cell(row_num, 8).value
+            
+            if not col_e and not col_f and not col_h:
+                print(f"Skipping row {row_num}: columns E, F, and H are empty")
+                row_num += 1
+                continue
             
             stock_name = ws.cell(row_num, 3).value
             investing_url = ws.cell(row_num, 14).value
@@ -219,8 +228,8 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                 if moex_price is not None:
                     normalized_price = normalize_price(moex_price)
                     ws.cell(row_num, 5).value = normalized_price
-                    ws.cell(row_num, 19).value = num_trades if num_trades is not None else 0
-                    ws.cell(row_num, 20).value = volume if volume is not None else 0
+                    ws.cell(row_num, 11).value = num_trades if num_trades is not None else 0
+                    ws.cell(row_num, 12).value = volume if volume is not None else 0
                     print(f"    MOEX: ✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
