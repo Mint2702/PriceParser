@@ -168,7 +168,7 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
             col_h = ws.cell(row_num, 8).value
             
             if not col_e and not col_f:
-                print(f"Skipping row {row_num}: columns E, F, and H are empty")
+                print(f"Skipping row {row_num}: columns E and F are empty")
                 row_num += 1
                 continue
             
