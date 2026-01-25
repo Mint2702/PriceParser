@@ -240,6 +240,9 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                     ws.cell(row_num, 6).value = normalized_price
                     print(f"    Investing.com: ✓ ${normalized_price}")
                     successful_investing += 1
+                elif moex_price is not None:
+                    ws.cell(row_num, 6).value = "ERROR"
+                    print(f"    Investing.com: ✗ Not found (ERROR)")
                 else:
                     print(f"    Investing.com: ✗ Not found")
                 
