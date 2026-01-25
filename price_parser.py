@@ -54,15 +54,16 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
     
     ws.cell(1, 4).value = date
     
-    if not ws.cell(2, 17).value:
-        ws.cell(2, 17).value = "Количество сделок"
-    if not ws.cell(2, 18).value:
-        ws.cell(2, 18).value = "Объем торгов"
+    if not ws.cell(2, 11).value:
+        ws.cell(2, 11).value = "Количество сделок"
+    if not ws.cell(2, 12).value:
+        ws.cell(2, 12).value = "Объем торгов"
     
     target_date = format_date_for_api(date)
     
     row_num = 4
     total_rows = 0
+    skipped_rows = 0
     successful_moex = 0
     successful_investing = 0
     
@@ -73,6 +74,17 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
         isin = ws.cell(row_num, 2).value
         if not isin:
             break
+        
+        col_e = ws.cell(row_num, 5).value
+        col_f = ws.cell(row_num, 6).value
+        col_h = ws.cell(row_num, 8).value
+        
+        if not col_e and not col_f and not col_h:
+            stock_name = ws.cell(row_num, 3).value
+            print(f"\n[{row_num-3}] {stock_name} - Skipped (no data in columns E, F, H)")
+            skipped_rows += 1
+            row_num += 1
+            continue
         
         total_rows += 1
         stock_name = ws.cell(row_num, 3).value
@@ -99,8 +111,8 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
                 if moex_price is not None:
                     normalized_price = normalize_price(moex_price)
                     ws.cell(row_num, 5).value = normalized_price
-                    ws.cell(row_num, 17).value = num_trades if num_trades is not None else 0
-                    ws.cell(row_num, 18).value = volume if volume is not None else 0
+                    ws.cell(row_num, 11).value = num_trades if num_trades is not None else 0
+                    ws.cell(row_num, 12).value = volume if volume is not None else 0
                     print(f"✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
@@ -132,6 +144,7 @@ def run_sync_version(input_path: Path, output_path: Path, date: datetime):
     print("\n" + "=" * 80)
     print(f"Summary:")
     print(f"  Total stocks processed: {total_rows}")
+    print(f"  Stocks skipped: {skipped_rows}")
     print(f"  MOEX prices found: {successful_moex}/{total_rows}")
     print(f"  Investing.com prices found: {successful_investing}/{total_rows}")
     
@@ -176,20 +189,32 @@ async def run_async_version(input_path: Path, output_path: Path, date: datetime,
     
     ws.cell(1, 4).value = date
     
-    if not ws.cell(2, 17).value:
-        ws.cell(2, 17).value = "Количество сделок"
-    if not ws.cell(2, 18).value:
-        ws.cell(2, 18).value = "Объем торгов"
+    if not ws.cell(2, 11).value:
+        ws.cell(2, 11).value = "Количество сделок"
+    if not ws.cell(2, 12).value:
+        ws.cell(2, 12).value = "Объем торгов"
     
     target_date = format_date_for_api(date)
     
     stocks_data = []
+    skipped_rows = 0
     row_num = 4
     
     while True:
         isin = ws.cell(row_num, 2).value
         if not isin:
             break
+        
+        col_e = ws.cell(row_num, 5).value
+        col_f = ws.cell(row_num, 6).value
+        col_h = ws.cell(row_num, 8).value
+        
+        if not col_e and not col_f and not col_h:
+            stock_name = ws.cell(row_num, 3).value
+            print(f"Skipped {stock_name} (row {row_num}) - no data in columns E, F, H")
+            skipped_rows += 1
+            row_num += 1
+            continue
         
         stock_name = ws.cell(row_num, 3).value
         investing_url = ws.cell(row_num, 14).value
@@ -245,8 +270,8 @@ async def run_async_version(input_path: Path, output_path: Path, date: datetime,
             if moex_price is not None:
                 normalized_price = normalize_price(moex_price)
                 ws.cell(row_num, 5).value = normalized_price
-                ws.cell(row_num, 17).value = num_trades if num_trades is not None else 0
-                ws.cell(row_num, 18).value = volume if volume is not None else 0
+                ws.cell(row_num, 11).value = num_trades if num_trades is not None else 0
+                ws.cell(row_num, 12).value = volume if volume is not None else 0
                 print(f"    MOEX: ✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                 successful_moex += 1
             else:
@@ -263,6 +288,7 @@ async def run_async_version(input_path: Path, output_path: Path, date: datetime,
     print("\n" + "=" * 80)
     print(f"Summary:")
     print(f"  Total stocks processed: {total_rows}")
+    print(f"  Stocks skipped: {skipped_rows}")
     print(f"  MOEX prices found: {successful_moex}/{total_rows}")
     print(f"  Investing.com prices found: {successful_investing}/{total_rows}")
     
