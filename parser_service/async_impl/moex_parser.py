@@ -1,7 +1,10 @@
 import json
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from curl_cffi.requests import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 
 async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
@@ -49,8 +52,8 @@ async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
         except Exception as e:
             if attempt < max_retries - 1:
                 delay = retry_delays[attempt]
-                print(f"MOEX parser error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
+                logger.warning(f"MOEX parser error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
                 await asyncio.sleep(delay)
             else:
-                print(f"MOEX parser failed after {max_retries} attempts: {e}")
+                logger.error(f"MOEX parser failed after {max_retries} attempts: {e}")
                 raise

@@ -2,6 +2,7 @@
 import os
 import sys
 import asyncio
+import logging
 import redis.asyncio as redis
 from pathlib import Path
 from datetime import datetime
@@ -10,6 +11,15 @@ import openpyxl
 import xml.etree.ElementTree as ET
 from curl_cffi.requests import AsyncSession
 from async_impl import parse_moex_stock_async, get_investing_price_async
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
@@ -83,7 +93,7 @@ async def get_usd_rate_from_cbr(date: datetime) -> float | None:
             
             return None
     except Exception as e:
-        print(f"Error fetching USD rate from CBR: {e}", file=sys.stderr)
+        logger.error(f"Error fetching USD rate from CBR: {e}")
         return None
 
 
@@ -105,7 +115,7 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
                         volume = entry.get('volume')
                         break
         except Exception as e:
-            print(f"  [{index}] {stock_name} - MOEX error: {e}", file=sys.stderr)
+            logger.error(f"  [{index}] {stock_name} - MOEX error: {e}")
     
     if investing_url and moex_price is not None:
         for attempt in range(INVESTING_MAX_RETRIES):
@@ -115,15 +125,15 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
                     break
                 if attempt < INVESTING_MAX_RETRIES - 1:
                     delay = INVESTING_RETRY_DELAY * (2 ** attempt)
-                    print(f"  [{index}] {stock_name} - Investing.com returned None, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})", file=sys.stderr)
+                    logger.warning(f"  [{index}] {stock_name} - Investing.com returned None, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})")
                     await asyncio.sleep(delay)
             except Exception as e:
                 if attempt < INVESTING_MAX_RETRIES - 1:
                     delay = INVESTING_RETRY_DELAY * (2 ** attempt)
-                    print(f"  [{index}] {stock_name} - Investing.com error: {e}, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})", file=sys.stderr)
+                    logger.warning(f"  [{index}] {stock_name} - Investing.com error: {e}, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})")
                     await asyncio.sleep(delay)
                 else:
-                    print(f"  [{index}] {stock_name} - Investing.com error after {INVESTING_MAX_RETRIES} attempts: {e}", file=sys.stderr)
+                    logger.error(f"  [{index}] {stock_name} - Investing.com error after {INVESTING_MAX_RETRIES} attempts: {e}")
     
     return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price
 
@@ -135,7 +145,7 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
     try:
         temp_input.write_bytes(file_content)
         
-        print(f"Loading Excel file...")
+        logger.info(f"Loading Excel file...")
         wb = openpyxl.load_workbook(temp_input)
         ws = wb.active
         
@@ -148,12 +158,12 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
         
         target_date = format_date_for_api(date)
         
-        print(f"Fetching USD exchange rate from CBR...")
+        logger.info(f"Fetching USD exchange rate from CBR...")
         usd_rate = await get_usd_rate_from_cbr(date)
         if usd_rate:
-            print(f"USD rate: {usd_rate} RUB")
+            logger.info(f"USD rate: {usd_rate} RUB")
         else:
-            print(f"Warning: Could not fetch USD rate from CBR", file=sys.stderr)
+            logger.warning(f"Could not fetch USD rate from CBR")
         
         stocks_data = []
         row_num = 4
@@ -190,15 +200,15 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
         successful_moex = 0
         successful_investing = 0
         
-        print(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')}")
-        print(f"Using batch size: {BATCH_SIZE} concurrent requests")
-        print("-" * 80)
+        logger.info(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')}")
+        logger.info(f"Using batch size: {BATCH_SIZE} concurrent requests")
+        logger.info("-" * 80)
         
         for batch_start in range(0, total_rows, BATCH_SIZE):
             batch_end = min(batch_start + BATCH_SIZE, total_rows)
             batch = stocks_data[batch_start:batch_end]
             
-            print(f"\nProcessing batch {batch_start//BATCH_SIZE + 1}/{(total_rows + BATCH_SIZE - 1)//BATCH_SIZE} "
+            logger.info(f"\nProcessing batch {batch_start//BATCH_SIZE + 1}/{(total_rows + BATCH_SIZE - 1)//BATCH_SIZE} "
                   f"(stocks {batch_start + 1}-{batch_end})...")
             
             tasks = [
@@ -217,12 +227,12 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
             
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    print(f"  [{batch_start + i + 1}] Error: {result}", file=sys.stderr)
+                    logger.error(f"  [{batch_start + i + 1}] Error: {result}")
                     continue
                 
                 row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price = result
                 
-                print(f"  [{batch_start + i + 1}] {stock_name} ({ticker})")
+                logger.info(f"  [{batch_start + i + 1}] {stock_name} ({ticker})")
                 
                 ws.cell(row_num, 4).value = date.strftime('%d.%m.%Y')
                 
@@ -231,37 +241,37 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
                     ws.cell(row_num, 5).value = normalized_price
                     ws.cell(row_num, 11).value = num_trades if num_trades is not None else 0
                     ws.cell(row_num, 12).value = volume if volume is not None else 0
-                    print(f"    MOEX: ✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
+                    logger.info(f"    MOEX: ✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
-                    print(f"    MOEX: ✗ Not found")
+                    logger.info(f"    MOEX: ✗ Not found")
                 
                 if investing_price is not None:
                     normalized_price = normalize_price(investing_price)
                     ws.cell(row_num, 6).value = normalized_price
-                    print(f"    Investing.com: ✓ ${normalized_price}")
+                    logger.info(f"    Investing.com: ✓ ${normalized_price}")
                     successful_investing += 1
                 elif moex_price is not None:
                     ws.cell(row_num, 6).value = "ERROR"
-                    print(f"    Investing.com: ✗ Not found (ERROR)")
+                    logger.info(f"    Investing.com: ✗ Not found (ERROR)")
                 else:
-                    print(f"    Investing.com: ✗ Not found")
+                    logger.info(f"    Investing.com: ✗ Not found")
                 
                 if usd_rate is not None:
                     ws.cell(row_num, 7).value = usd_rate
             
             await asyncio.sleep(0.3)
         
-        print("\n" + "=" * 80)
+        logger.info("\n" + "=" * 80)
         summary = (
             f"📊 Summary:\n"
             f"  Total stocks: {total_rows}\n"
             f"  MOEX prices found: {successful_moex}/{total_rows}\n"
             f"  Investing.com prices found: {successful_investing}/{total_rows}"
         )
-        print(summary)
+        logger.info(summary)
         
-        print(f"\nSaving results...")
+        logger.info(f"\nSaving results...")
         wb.save(temp_output)
         
         result_content = temp_output.read_bytes()
@@ -280,12 +290,12 @@ async def process_job(job_data: dict):
     date_str = job_data['date']
     file_content = bytes.fromhex(job_data['file_content'])
     
-    print(f"\n{'='*80}")
-    print(f"📋 Processing job: {job_id}")
-    print(f"👤 User: {user_id}")
-    print(f"📁 File: {filename}")
-    print(f"📅 Date: {date_str}")
-    print(f"{'='*80}\n")
+    logger.info(f"\n{'='*80}")
+    logger.info(f"📋 Processing job: {job_id}")
+    logger.info(f"👤 User: {user_id}")
+    logger.info(f"📁 File: {filename}")
+    logger.info(f"📅 Date: {date_str}")
+    logger.info(f"{'='*80}\n")
     
     try:
         date = datetime.strptime(date_str, '%d.%m.%Y')
@@ -303,10 +313,10 @@ async def process_job(job_data: dict):
         }
         
         await r.xadd(RESULTS_STREAM, result_data)
-        print(f"\n✅ Job {job_id} completed successfully!")
+        logger.info(f"\n✅ Job {job_id} completed successfully!")
     
     except Exception as e:
-        print(f"\n❌ Job {job_id} failed with error: {e}")
+        logger.error(f"\n❌ Job {job_id} failed with error: {e}")
         traceback.print_exc()
         
         r = await get_redis()
@@ -325,17 +335,17 @@ async def main():
     
     try:
         await r.xgroup_create(JOBS_STREAM, CONSUMER_GROUP, id='0', mkstream=True)
-        print(f"✅ Created consumer group: {CONSUMER_GROUP}")
+        logger.info(f"✅ Created consumer group: {CONSUMER_GROUP}")
     except redis.ResponseError as e:
         if 'BUSYGROUP' in str(e):
-            print(f"ℹ️  Consumer group already exists: {CONSUMER_GROUP}")
+            logger.info(f"ℹ️  Consumer group already exists: {CONSUMER_GROUP}")
         else:
             raise
     
-    print(f"🚀 Parser service started!")
-    print(f"👂 Listening for jobs on stream: {JOBS_STREAM}")
-    print(f"🔧 Batch size: {BATCH_SIZE}")
-    print(f"{'='*80}\n")
+    logger.info(f"🚀 Parser service started!")
+    logger.info(f"👂 Listening for jobs on stream: {JOBS_STREAM}")
+    logger.info(f"🔧 Batch size: {BATCH_SIZE}")
+    logger.info(f"{'='*80}\n")
     
     while True:
         try:
@@ -353,11 +363,11 @@ async def main():
                         await process_job(job_data)
                         await r.xack(JOBS_STREAM, CONSUMER_GROUP, message_id)
                     except Exception as e:
-                        print(f"Error processing job: {e}")
+                        logger.error(f"Error processing job: {e}")
                         traceback.print_exc()
         
         except Exception as e:
-            print(f"Error reading from Redis stream: {e}")
+            logger.error(f"Error reading from Redis stream: {e}")
             await asyncio.sleep(5)
 
 

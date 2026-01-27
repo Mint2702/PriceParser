@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import os
+import sys
 import json
 import asyncio
+import logging
 import redis.asyncio as redis
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -16,6 +18,15 @@ from datetime import datetime
 from pathlib import Path
 import uuid
 from functools import wraps
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 WAITING_FOR_FILE, WAITING_FOR_DATE = range(2)
 
@@ -34,7 +45,7 @@ if ALLOWED_USER_IDS_STR:
     try:
         ALLOWED_USER_IDS = set(int(uid.strip()) for uid in ALLOWED_USER_IDS_STR.split(',') if uid.strip())
     except ValueError:
-        print("⚠️  Warning: Invalid ALLOWED_USER_IDS format. Bot will be accessible to everyone.")
+        logger.warning("Invalid ALLOWED_USER_IDS format. Bot will be accessible to everyone.")
 
 
 def authorized_only(func):
@@ -44,7 +55,7 @@ def authorized_only(func):
         username = update.effective_user.username or "Unknown"
         
         if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-            print(f"⛔ Unauthorized access attempt by user {user_id} (@{username})")
+            logger.warning(f"Unauthorized access attempt by user {user_id} (@{username})")
             await update.message.reply_text(
                 "🚫 У вас нет доступа к этому боту.\n\n"
                 "Если вы считаете, что это ошибка, свяжитесь с администратором."
@@ -204,7 +215,7 @@ async def listen_for_results(application: Application):
     except redis.ResponseError:
         pass
     
-    print(f"👂 Listening for results on stream: {RESULTS_STREAM}")
+    logger.info(f"Listening for results on stream: {RESULTS_STREAM}")
     
     while True:
         try:
@@ -222,10 +233,10 @@ async def listen_for_results(application: Application):
                         await process_result(application, data)
                         await r.xack(RESULTS_STREAM, CONSUMER_GROUP, message_id)
                     except Exception as e:
-                        print(f"Error processing result: {e}")
+                        logger.error(f"Error processing result: {e}")
         
         except Exception as e:
-            print(f"Error reading from Redis stream: {e}")
+            logger.error(f"Error reading from Redis stream: {e}")
             await asyncio.sleep(5)
 
 
@@ -234,7 +245,7 @@ async def process_result(application: Application, data: dict):
     user_id = int(data.get('user_id'))
     status = data.get('status')
     
-    print(f"📨 Received result for job {job_id}: {status}")
+    logger.info(f"Received result for job {job_id}: {status}")
     
     if status == 'success':
         file_content = bytes.fromhex(data.get('file_content'))
@@ -270,13 +281,13 @@ async def post_init(application: Application):
 
 def main():
     if not BOT_TOKEN:
-        print("Error: TELEGRAM_BOT_TOKEN environment variable not set")
+        logger.error("TELEGRAM_BOT_TOKEN environment variable not set")
         return
     
     if ALLOWED_USER_IDS:
-        print(f"🔒 Bot is restricted to {len(ALLOWED_USER_IDS)} authorized user(s)")
+        logger.info(f"Bot is restricted to {len(ALLOWED_USER_IDS)} authorized user(s)")
     else:
-        print("⚠️  WARNING: Bot is accessible to EVERYONE. Set ALLOWED_USER_IDS to restrict access.")
+        logger.warning("Bot is accessible to EVERYONE. Set ALLOWED_USER_IDS to restrict access.")
     
     application = (
         Application.builder()
@@ -306,7 +317,7 @@ def main():
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(conv_handler)
     
-    print("🤖 Bot started!")
+    logger.info("Bot started!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

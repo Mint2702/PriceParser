@@ -1,7 +1,10 @@
 import asyncio
 import re
+import logging
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 
 async def get_stock_id_async(stock_url: str) -> int:
@@ -33,10 +36,10 @@ async def get_stock_id_async(stock_url: str) -> int:
         except Exception as e:
             if attempt < max_retries - 1:
                 delay = retry_delays[attempt]
-                print(f"Investing get_stock_id error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s... Url: {stock_url}")
+                logger.warning(f"Investing get_stock_id error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s... Url: {stock_url}")
                 await asyncio.sleep(delay)
             else:
-                print(f"Investing get_stock_id failed after {max_retries} attempts: {e}. Url: {stock_url}")
+                logger.error(f"Investing get_stock_id failed after {max_retries} attempts: {e}. Url: {stock_url}")
                 raise
 
 
@@ -75,10 +78,10 @@ async def get_stock_data_async(stock_id: int, start_date: str, end_date: str) ->
         except Exception as e:
             if attempt < max_retries - 1:
                 delay = retry_delays[attempt]
-                print(f"Investing get_stock_data error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
+                logger.warning(f"Investing get_stock_data error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
                 await asyncio.sleep(delay)
             else:
-                print(f"Investing get_stock_data failed after {max_retries} attempts: {e}")
+                logger.error(f"Investing get_stock_data failed after {max_retries} attempts: {e}")
                 raise
 
 
