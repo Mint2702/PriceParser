@@ -26,7 +26,7 @@ REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
 CONSUMER_GROUP = 'parser_service'
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 10))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 7))
 INVESTING_MAX_RETRIES = int(os.getenv('INVESTING_MAX_RETRIES', 3))
 INVESTING_RETRY_DELAY = float(os.getenv('INVESTING_RETRY_DELAY', 2.0))
 
