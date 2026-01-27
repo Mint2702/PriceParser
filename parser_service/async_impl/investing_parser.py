@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 async def get_stock_id_async(stock_url: str) -> int:
-    max_retries = 5
-    retry_delays = [2, 4, 8, 16, 32]
+    max_retries = 3
+    retry_delays = [2, 4, 8]
     
     for attempt in range(max_retries):
         try:
@@ -46,8 +46,8 @@ async def get_stock_id_async(stock_url: str) -> int:
 async def get_stock_data_async(stock_id: int, start_date: str, end_date: str) -> list[dict]:
     url = f"https://api.investing.com/api/financialdata/historical/{stock_id}?start-date={start_date}&end-date={end_date}&time-frame=Daily&add-missing-rows=false"
 
-    max_retries = 5
-    retry_delays = [2, 4, 8, 16, 32]
+    max_retries = 3
+    retry_delays = [1, 3, 5]
     
     for attempt in range(max_retries):
         try:
