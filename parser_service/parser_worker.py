@@ -138,7 +138,7 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
     return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price
 
 
-async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes, str]:
+async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False) -> tuple[bytes, str]:
     temp_input = Path(f"/tmp/input_{os.getpid()}.xlsx")
     temp_output = Path(f"/tmp/output_{os.getpid()}.xlsx")
     
@@ -177,6 +177,11 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
             col_f = ws.cell(row_num, 6).value
             col_h = ws.cell(row_num, 8).value
             
+            if reparse_mode:
+                if col_f != "ERROR":
+                    row_num += 1
+                    continue
+            
             # Skipping rows logic
             # if not col_e and not col_f:
             #     print(f"Skipping row {row_num}: columns E and F are empty")
@@ -200,7 +205,8 @@ async def process_excel_file(file_content: bytes, date: datetime) -> tuple[bytes
         successful_moex = 0
         successful_investing = 0
         
-        logger.info(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')}")
+        mode_str = "REPARSE (ERROR rows only)" if reparse_mode else "FULL"
+        logger.info(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')} [Mode: {mode_str}]")
         logger.info(f"Using batch size: {BATCH_SIZE} concurrent requests")
         logger.info("-" * 80)
         
@@ -287,20 +293,42 @@ async def process_job(job_data: dict):
     job_id = job_data['job_id']
     user_id = job_data['user_id']
     filename = job_data['filename']
-    date_str = job_data['date']
     file_content = bytes.fromhex(job_data['file_content'])
+    mode = job_data.get('mode', 'parse')
+    reparse_mode = (mode == 'reparse')
+    
+    if reparse_mode:
+        temp_file = Path(f"/tmp/check_{os.getpid()}.xlsx")
+        try:
+            temp_file.write_bytes(file_content)
+            wb = openpyxl.load_workbook(temp_file)
+            ws = wb.active
+            date_value = ws.cell(1, 4).value
+            
+            if isinstance(date_value, datetime):
+                date = date_value
+                date_str = date.strftime('%d.%m.%Y')
+            elif isinstance(date_value, str):
+                date_str = date_value
+                date = datetime.strptime(date_str, '%d.%m.%Y')
+            else:
+                raise ValueError("Date not found in Excel file (cell D1)")
+        finally:
+            temp_file.unlink(missing_ok=True)
+    else:
+        date_str = job_data['date']
+        date = datetime.strptime(date_str, '%d.%m.%Y')
     
     logger.info(f"\n{'='*80}")
     logger.info(f"📋 Processing job: {job_id}")
     logger.info(f"👤 User: {user_id}")
     logger.info(f"📁 File: {filename}")
     logger.info(f"📅 Date: {date_str}")
+    logger.info(f"🔄 Mode: {'REPARSE (ERROR rows only)' if reparse_mode else 'FULL'}")
     logger.info(f"{'='*80}\n")
     
     try:
-        date = datetime.strptime(date_str, '%d.%m.%Y')
-        
-        result_content, summary = await process_excel_file(file_content, date)
+        result_content, summary = await process_excel_file(file_content, date, reparse_mode)
         
         r = await get_redis()
         result_data = {

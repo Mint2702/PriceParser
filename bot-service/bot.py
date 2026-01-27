@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-WAITING_FOR_FILE, WAITING_FOR_DATE = range(2)
+WAITING_FOR_FILE, WAITING_FOR_DATE, WAITING_FOR_REPARSE_FILE = range(3)
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
@@ -85,6 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Отправьте мне Excel файл (шаблон котировок) и я загружу актуальные цены акций.\n\n"
         "Команды:\n"
         "/parse - Начать обработку нового файла\n"
+        "/reparse - Обработать только строки с ERROR в столбце F\n"
         "/cancel - Отменить текущую операцию\n"
         "/help - Показать справку"
     )
@@ -94,11 +95,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 Как использовать бот:\n\n"
+        "Полная обработка (/parse):\n"
         "1. Отправьте команду /parse\n"
         "2. Загрузите Excel файл (шаблон котировок)\n"
         "3. Введите дату в формате ДД.ММ.ГГГГ (например, 31.10.2025)\n"
         "4. Дождитесь обработки (это может занять несколько минут)\n"
         "5. Получите заполненный Excel файл\n\n"
+        "Повторная обработка ошибок (/reparse):\n"
+        "1. Отправьте команду /reparse\n"
+        "2. Загрузите Excel файл со строками с ERROR в столбце F\n"
+        "3. Бот повторно обработает только строки с ошибками\n\n"
         "Используйте /cancel для отмены текущей операции."
     )
 
@@ -186,6 +192,60 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['job_id'] = job_id
     context.user_data['chat_id'] = update.effective_chat.id
+    
+    Path(file_path).unlink(missing_ok=True)
+    
+    return ConversationHandler.END
+
+
+@authorized_only
+async def reparse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📁 Пожалуйста, отправьте мне Excel файл с ERROR в столбце F для повторной обработки."
+    )
+    return WAITING_FOR_REPARSE_FILE
+
+
+async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    document = update.message.document
+    
+    if not document.file_name.endswith(('.xlsx', '.xls')):
+        await update.message.reply_text(
+            "❌ Пожалуйста, отправьте Excel файл (.xlsx или .xls)"
+        )
+        return WAITING_FOR_REPARSE_FILE
+    
+    await update.message.reply_text("⏳ Загружаю файл...")
+    
+    file = await document.get_file()
+    file_path = Path(f"/tmp/{uuid.uuid4()}_{document.file_name}")
+    await file.download_to_drive(file_path)
+    
+    with open(file_path, 'rb') as f:
+        file_content = f.read()
+    
+    job_id = str(uuid.uuid4())
+    user_id = update.effective_user.id
+    
+    r = await get_redis()
+    
+    job_data = {
+        'job_id': job_id,
+        'user_id': str(user_id),
+        'filename': document.file_name,
+        'file_content': file_content.hex(),
+        'mode': 'reparse',
+    }
+    
+    await r.xadd(JOBS_STREAM, job_data)
+    
+    await update.message.reply_text(
+        f"🚀 Повторная обработка начата!\n\n"
+        f"📊 Файл: {document.file_name}\n"
+        f"🔄 Режим: только строки с ERROR\n\n"
+        f"⏳ Это может занять несколько минут. Я отправлю вам результат, когда он будет готов.\n\n"
+        f"ID задачи: {job_id}"
+    )
     
     Path(file_path).unlink(missing_ok=True)
     
@@ -313,9 +373,20 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
     )
     
+    reparse_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('reparse', reparse_command)],
+        states={
+            WAITING_FOR_REPARSE_FILE: [
+                MessageHandler(filters.Document.ALL, reparse_file_received)
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(conv_handler)
+    application.add_handler(reparse_conv_handler)
     
     logger.info("Bot started!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
