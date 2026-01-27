@@ -26,7 +26,7 @@ REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
 CONSUMER_GROUP = 'parser_service'
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 7))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 5))
 INVESTING_MAX_RETRIES = int(os.getenv('INVESTING_MAX_RETRIES', 3))
 INVESTING_RETRY_DELAY = float(os.getenv('INVESTING_RETRY_DELAY', 2.0))
 
@@ -204,6 +204,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         total_rows = len(stocks_data)
         successful_moex = 0
         successful_investing = 0
+        error_count = 0
         
         mode_str = "REPARSE (ERROR rows only)" if reparse_mode else "FULL"
         logger.info(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')} [Mode: {mode_str}]")
@@ -260,6 +261,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                 elif moex_price is not None:
                     ws.cell(row_num, 6).value = "ERROR"
                     logger.info(f"    Investing.com: ✗ Not found (ERROR)")
+                    error_count += 1
                 else:
                     logger.info(f"    Investing.com: ✗ Not found")
                 
@@ -272,8 +274,10 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         summary = (
             f"📊 Summary:\n"
             f"  Total stocks: {total_rows}\n"
+            f"  Total counted stocks: {successful_moex}\n"
             f"  MOEX prices found: {successful_moex}/{total_rows}\n"
-            f"  Investing.com prices found: {successful_investing}/{total_rows}"
+            f"  Investing.com prices found: {successful_investing}/{total_rows}\n"
+            f"  ERRORs: {error_count}"
         )
         logger.info(summary)
         
