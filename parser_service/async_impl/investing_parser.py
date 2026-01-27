@@ -33,10 +33,10 @@ async def get_stock_id_async(stock_url: str) -> int:
         except Exception as e:
             if attempt < max_retries - 1:
                 delay = retry_delays[attempt]
-                print(f"Investing get_stock_id error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
+                print(f"Investing get_stock_id error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s... Url: {stock_url}")
                 await asyncio.sleep(delay)
             else:
-                print(f"Investing get_stock_id failed after {max_retries} attempts: {e}")
+                print(f"Investing get_stock_id failed after {max_retries} attempts: {e}. Url: {stock_url}")
                 raise
 
 
