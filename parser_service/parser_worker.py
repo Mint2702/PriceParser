@@ -10,7 +10,9 @@ import traceback
 import openpyxl
 import xml.etree.ElementTree as ET
 from curl_cffi.requests import AsyncSession
+
 from async_impl import parse_moex_stock_async, get_investing_price_async
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,10 +153,10 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         
         ws.cell(1, 4).value = date.strftime('%d.%m.%Y')
         
-        if not ws.cell(2, 11).value:
-            ws.cell(2, 11).value = "Количество сделок"
-        if not ws.cell(2, 12).value:
-            ws.cell(2, 12).value = "Объем торгов"
+        if not ws.cell(2, 5).value:
+            ws.cell(2, 5).value = "Сделок, штук"
+        if not ws.cell(2, 6).value:
+            ws.cell(2, 6).value = "Объем"
         
         target_date = format_date_for_api(date)
         
@@ -178,7 +180,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
             col_h = ws.cell(row_num, 8).value
             
             if reparse_mode:
-                if col_f != "ERROR":
+                if col_h != "ERROR":
                     row_num += 1
                     continue
             
@@ -245,9 +247,9 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                 
                 if moex_price is not None:
                     normalized_price = normalize_price(moex_price)
-                    ws.cell(row_num, 5).value = normalized_price
-                    ws.cell(row_num, 11).value = num_trades if num_trades is not None else 0
-                    ws.cell(row_num, 12).value = volume if volume is not None else 0
+                    ws.cell(row_num, 7).value = normalized_price
+                    ws.cell(row_num, 5).value = num_trades if num_trades is not None else 0
+                    ws.cell(row_num, 6).value = volume if volume is not None else 0
                     logger.info(f"    MOEX: ✓ {normalized_price} RUB (trades: {num_trades}, vol: {volume})")
                     successful_moex += 1
                 else:
@@ -255,18 +257,18 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                 
                 if investing_price is not None:
                     normalized_price = normalize_price(investing_price)
-                    ws.cell(row_num, 6).value = normalized_price
+                    ws.cell(row_num, 8).value = normalized_price
                     logger.info(f"    Investing.com: ✓ ${normalized_price}")
                     successful_investing += 1
                 elif moex_price is not None:
-                    ws.cell(row_num, 6).value = "ERROR"
+                    ws.cell(row_num, 8).value = "ERROR"
                     logger.info(f"    Investing.com: ✗ Not found (ERROR)")
                     error_count += 1
                 else:
                     logger.info(f"    Investing.com: ✗ Not found")
                 
                 if usd_rate is not None:
-                    ws.cell(row_num, 7).value = usd_rate
+                    ws.cell(row_num, 9).value = usd_rate
             
             await asyncio.sleep(0.3)
         

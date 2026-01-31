@@ -85,7 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Отправьте мне Excel файл (шаблон котировок) и я загружу актуальные цены акций.\n\n"
         "Команды:\n"
         "/parse - Начать обработку нового файла\n"
-        "/reparse - Обработать только строки с ERROR в столбце F\n"
+        "/reparse - Обработать только строки с ERROR в столбце H\n"
         "/cancel - Отменить текущую операцию\n"
         "/help - Показать справку"
     )
@@ -103,7 +103,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "5. Получите заполненный Excel файл\n\n"
         "Повторная обработка ошибок (/reparse):\n"
         "1. Отправьте команду /reparse\n"
-        "2. Загрузите Excel файл со строками с ERROR в столбце F\n"
+        "2. Загрузите Excel файл со строками с ERROR в столбце H\n"
         "3. Бот повторно обработает только строки с ошибками\n\n"
         "Используйте /cancel для отмены текущей операции."
     )
@@ -201,7 +201,7 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @authorized_only
 async def reparse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📁 Пожалуйста, отправьте мне Excel файл с ERROR в столбце F для повторной обработки."
+        "📁 Пожалуйста, отправьте мне Excel файл с ERROR в столбце H для повторной обработки."
     )
     return WAITING_FOR_REPARSE_FILE
 
