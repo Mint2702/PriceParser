@@ -53,6 +53,46 @@ services:
     deploy:
       replicas: 1
 
+  us-bot-service:
+    build:
+      context: ./us-bot-service
+      dockerfile: Dockerfile
+    container_name: priceparser-us-bot
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - priceparser-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+  us-parser-service:
+    build:
+      context: ./us-parser-service
+      dockerfile: Dockerfile
+    container_name: priceparser-us-worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BATCH_SIZE=5
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - priceparser-network
+    deploy:
+      replicas: 1
+
 volumes:
   redis-data:
 
