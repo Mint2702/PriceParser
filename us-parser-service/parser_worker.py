@@ -171,7 +171,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                     continue
 
             stock_name = ws.cell(row_num, 3).value
-            investing_url = ws.cell(row_num, 14).value
+            investing_url = ws.cell(row_num, 8).value
 
             stocks_data.append({
                 'row_num': row_num,
