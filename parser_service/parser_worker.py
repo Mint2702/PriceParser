@@ -140,7 +140,7 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
     return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price
 
 
-async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False) -> tuple[bytes, str]:
+async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None) -> tuple[bytes, str]:
     temp_input = Path(f"/tmp/input_{os.getpid()}.xlsx")
     temp_output = Path(f"/tmp/output_{os.getpid()}.xlsx")
     
@@ -203,6 +203,9 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
             
             row_num += 1
         
+        if limit is not None:
+            stocks_data = stocks_data[:limit]
+
         total_rows = len(stocks_data)
         successful_moex = 0
         successful_investing = 0
@@ -324,17 +327,21 @@ async def process_job(job_data: dict):
     else:
         date_str = job_data['date']
         date = datetime.strptime(date_str, '%d.%m.%Y')
-    
+
+    limit_str = job_data.get('limit')
+    limit = int(limit_str) if limit_str else None
+
     logger.info(f"\n{'='*80}")
     logger.info(f"📋 Processing job: {job_id}")
     logger.info(f"👤 User: {user_id}")
     logger.info(f"📁 File: {filename}")
     logger.info(f"📅 Date: {date_str}")
     logger.info(f"🔄 Mode: {'REPARSE (ERROR rows only)' if reparse_mode else 'FULL'}")
+    logger.info(f"📋 Limit: {limit if limit is not None else 'all rows'}")
     logger.info(f"{'='*80}\n")
     
     try:
-        result_content, summary = await process_excel_file(file_content, date, reparse_mode)
+        result_content, summary = await process_excel_file(file_content, date, reparse_mode, limit)
         
         r = await get_redis()
         result_data = {

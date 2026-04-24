@@ -5,12 +5,13 @@ import json
 import asyncio
 import logging
 import redis.asyncio as redis
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -28,7 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-WAITING_FOR_FILE, WAITING_FOR_DATE, WAITING_FOR_REPARSE_FILE = range(3)
+WAITING_FOR_FILE, WAITING_FOR_DATE, WAITING_FOR_LIMIT, WAITING_FOR_REPARSE_FILE = range(4)
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
@@ -146,32 +147,79 @@ async def file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = update.message.text.strip()
-    
+
     try:
-        date = datetime.strptime(date_str, '%d.%m.%Y')
+        datetime.strptime(date_str, '%d.%m.%Y')
     except ValueError:
         await update.message.reply_text(
             "❌ Неверный формат даты. Пожалуйста, используйте формат ДД.ММ.ГГГГ (например, 31.10.2025)"
         )
         return WAITING_FOR_DATE
-    
+
     file_path = context.user_data.get('file_path')
-    original_filename = context.user_data.get('original_filename')
-    
+
     if not file_path or not Path(file_path).exists():
         await update.message.reply_text(
             "❌ Файл не найден. Пожалуйста, начните заново с команды /parse"
         )
         return ConversationHandler.END
-    
-    job_id = str(uuid.uuid4())
+
+    context.user_data['date_str'] = date_str
+
+    keyboard = [[InlineKeyboardButton("Парсить все", callback_data="parse_all")]]
+    await update.message.reply_text(
+        "📋 Введите количество строк для обработки (например: 10)\n"
+        "Или нажмите кнопку для обработки всех строк.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return WAITING_FOR_LIMIT
+
+
+async def limit_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    try:
+        limit = int(text)
+        if limit <= 0:
+            raise ValueError("Limit must be positive")
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Введите целое положительное число или нажмите кнопку «Парсить все»."
+        )
+        return WAITING_FOR_LIMIT
+
+    await _send_parse_job(update, context, limit=limit)
+    return ConversationHandler.END
+
+
+async def parse_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("✅ Выбрано: парсить все строки")
+    await _send_parse_job(update, context, limit=None)
+    return ConversationHandler.END
+
+
+async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, limit: int | None):
+    file_path = context.user_data.get('file_path')
+    original_filename = context.user_data.get('original_filename')
+    date_str = context.user_data.get('date_str')
     user_id = update.effective_user.id
-    
+
+    msg = update.message or update.callback_query.message
+
+    if not file_path or not Path(file_path).exists():
+        await msg.reply_text(
+            "❌ Файл не найден. Пожалуйста, начните заново с команды /parse"
+        )
+        return
+
+    job_id = str(uuid.uuid4())
+
     with open(file_path, 'rb') as f:
         file_content = f.read()
-    
+
     r = await get_redis()
-    
+
     job_data = {
         'job_id': job_id,
         'user_id': str(user_id),
@@ -179,23 +227,25 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'date': date_str,
         'file_content': file_content.hex(),
     }
-    
+    if limit is not None:
+        job_data['limit'] = str(limit)
+
     await r.xadd(JOBS_STREAM, job_data)
-    
-    await update.message.reply_text(
+
+    limit_text = f"первые {limit} строк" if limit is not None else "все строки"
+    await msg.reply_text(
         f"🚀 Обработка начата!\n\n"
         f"📊 Файл: {original_filename}\n"
-        f"📅 Дата: {date_str}\n\n"
+        f"📅 Дата: {date_str}\n"
+        f"📋 Лимит: {limit_text}\n\n"
         f"⏳ Это может занять несколько минут. Я отправлю вам результат, когда он будет готов.\n\n"
         f"ID задачи: {job_id}"
     )
-    
+
     context.user_data['job_id'] = job_id
     context.user_data['chat_id'] = update.effective_chat.id
-    
+
     Path(file_path).unlink(missing_ok=True)
-    
-    return ConversationHandler.END
 
 
 @authorized_only
@@ -368,6 +418,10 @@ def main():
             ],
             WAITING_FOR_DATE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, date_received)
+            ],
+            WAITING_FOR_LIMIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, limit_received),
+                CallbackQueryHandler(parse_all_callback, pattern="^parse_all$"),
             ],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
