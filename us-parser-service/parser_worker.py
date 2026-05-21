@@ -74,7 +74,7 @@ def normalize_price(price) -> float | None:
     return None
 
 
-async def get_usd_rate_from_cbr(date: datetime) -> float | None:
+async def get_currency_rates_from_cbr(date: datetime, currency_codes: set[str]) -> dict[str, float]:
     try:
         date_str = date.strftime('%d/%m/%Y')
         url = f"https://cbr.ru/scripts/XML_daily.asp?date_req={date_str}"
@@ -85,18 +85,22 @@ async def get_usd_rate_from_cbr(date: datetime) -> float | None:
 
             root = ET.fromstring(response.content)
 
+            rates = {}
             for valute in root.findall('Valute'):
                 char_code = valute.find('CharCode')
-                if char_code is not None and char_code.text == 'USD':
-                    value = valute.find('Value')
-                    if value is not None and value.text:
-                        usd_rate = float(value.text.replace(',', '.'))
-                        return usd_rate
+                if char_code is None or char_code.text not in currency_codes:
+                    continue
+                nominal_el = valute.find('Nominal')
+                value_el = valute.find('Value')
+                if value_el is not None and value_el.text:
+                    nominal = int(nominal_el.text) if nominal_el is not None and nominal_el.text else 1
+                    rate = float(value_el.text.replace(',', '.')) / nominal
+                    rates[char_code.text] = rate
 
-            return None
+            return rates
     except Exception as e:
-        logger.error(f"Error fetching USD rate from CBR: {e}")
-        return None
+        logger.error(f"Error fetching currency rates from CBR: {e}")
+        return {}
 
 
 async def process_single_stock_async(row_num: int, stock_name: str, investing_url: str,
@@ -148,13 +152,6 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
 
         target_date = format_date_for_api(date)
 
-        logger.info(f"Fetching USD exchange rate from CBR...")
-        usd_rate = await get_usd_rate_from_cbr(date)
-        if usd_rate:
-            logger.info(f"USD rate: {usd_rate} RUB")
-        else:
-            logger.warning(f"Could not fetch USD rate from CBR")
-
         stocks_data = []
         row_num = 4
 
@@ -171,11 +168,13 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                     continue
 
             stock_name = ws.cell(row_num, 3).value
-            investing_url = ws.cell(row_num, 8).value
+            currency = ws.cell(row_num, 6).value
+            investing_url = ws.cell(row_num, 9).value
 
             stocks_data.append({
                 'row_num': row_num,
                 'stock_name': stock_name,
+                'currency': currency,
                 'investing_url': investing_url
             })
 
@@ -183,6 +182,18 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
 
         if limit is not None:
             stocks_data = stocks_data[:limit]
+
+        currency_codes = {s['currency'] for s in stocks_data if s['currency']}
+        if currency_codes:
+            logger.info(f"Fetching exchange rates from CBR for: {', '.join(sorted(currency_codes))}...")
+            currency_rates = await get_currency_rates_from_cbr(date, currency_codes)
+            for code, rate in currency_rates.items():
+                logger.info(f"  {code}: {rate} RUB")
+            missing = currency_codes - currency_rates.keys()
+            for code in missing:
+                logger.warning(f"  Could not fetch rate for {code}")
+        else:
+            currency_rates = {}
 
         total_rows = len(stocks_data)
         successful = 0
@@ -230,12 +241,16 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                 if investing_price is not None:
                     normalized_price = normalize_price(investing_price)
                     ws.cell(row_num, 5).value = normalized_price
-                    logger.info(f"    Investing.com: ✓ ${normalized_price}")
+                    logger.info(f"    Investing.com: ✓ {normalized_price}")
                     successful += 1
 
-                    if usd_rate is not None:
-                        ws.cell(row_num, 6).value = usd_rate
-                        ws.cell(row_num, 7).value = round(normalized_price * usd_rate, 2)
+                    currency = stocks_data[batch_start + i].get('currency')
+                    rate = currency_rates.get(currency) if currency else None
+                    if rate is not None:
+                        ws.cell(row_num, 7).value = rate
+                        ws.cell(row_num, 8).value = round(normalized_price * rate, 2)
+                    elif currency:
+                        logger.warning(f"    No rate available for currency: {currency}")
                 elif stocks_data[batch_start + i].get('investing_url'):
                     ws.cell(row_num, 5).value = "ERROR"
                     logger.info(f"    Investing.com: ✗ Not found (ERROR)")
