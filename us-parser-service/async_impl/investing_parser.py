@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
-async def get_stock_id_async(stock_url: str) -> int:
+async def get_stock_id_async(stock_url: str) -> tuple[int, str | None]:
     max_retries = 3
     retry_delays = [2, 4, 8]
     
@@ -30,8 +30,11 @@ async def get_stock_id_async(stock_url: str) -> int:
                     stock_id = int(match.group(1))
                 else:
                     raise ValueError("instrument_id not found in identifiers object")
-                
-                return stock_id
+
+                currency_tag = soup.find(attrs={"data-test": "currency-in-label"})
+                currency = currency_tag.get_text(strip=True) if currency_tag else None
+
+                return stock_id, currency
                 
         except Exception as e:
             if attempt < max_retries - 1:
@@ -85,10 +88,9 @@ async def get_stock_data_async(stock_id: int, start_date: str, end_date: str) ->
                 raise
 
 
-async def get_investing_price_async(stock_url: str, target_date: str) -> float | None:
-    stock_id = await get_stock_id_async(stock_url)
+async def get_investing_price_async(stock_url: str, target_date: str) -> tuple[float | None, str | None]:
+    stock_id, currency = await get_stock_id_async(stock_url)
     await asyncio.sleep(0.5)
     results = await get_stock_data_async(stock_id, target_date, target_date)
-    if results:
-        return results[0].get('close_price')
-    return None
+    price = results[0].get('close_price') if results else None
+    return price, currency

@@ -60,6 +60,7 @@ async def get_stock_data_async(stock_id: int, start_date: str, end_date: str) ->
                 )
 
                 data = response.json().get('data', [])
+                print(data)
 
                 if not isinstance(data, (list, tuple)):
                     raise ValueError(f"Data is not iterable: {data}")

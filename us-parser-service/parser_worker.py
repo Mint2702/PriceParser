@@ -106,11 +106,12 @@ async def get_currency_rates_from_cbr(date: datetime, currency_codes: set[str]) 
 async def process_single_stock_async(row_num: int, stock_name: str, investing_url: str,
                                      target_date: str, index: int):
     investing_price = None
+    currency = None
 
     if investing_url:
         for attempt in range(INVESTING_MAX_RETRIES):
             try:
-                investing_price = await get_investing_price_async(investing_url, target_date)
+                investing_price, currency = await get_investing_price_async(investing_url, target_date)
                 if investing_price is not None:
                     break
                 if attempt < INVESTING_MAX_RETRIES - 1:
@@ -134,7 +135,7 @@ async def process_single_stock_async(row_num: int, stock_name: str, investing_ur
                         f"{INVESTING_MAX_RETRIES} attempts: {e}"
                     )
 
-    return row_num, stock_name, investing_price
+    return row_num, stock_name, investing_price, currency
 
 
 async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None) -> tuple[bytes, str]:
@@ -168,13 +169,11 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                     continue
 
             stock_name = ws.cell(row_num, 3).value
-            currency = ws.cell(row_num, 6).value
             investing_url = ws.cell(row_num, 9).value
 
             stocks_data.append({
                 'row_num': row_num,
                 'stock_name': stock_name,
-                'currency': currency,
                 'investing_url': investing_url
             })
 
@@ -183,33 +182,21 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         if limit is not None:
             stocks_data = stocks_data[:limit]
 
-        currency_codes = {s['currency'] for s in stocks_data if s['currency']}
-        if currency_codes:
-            logger.info(f"Fetching exchange rates from CBR for: {', '.join(sorted(currency_codes))}...")
-            currency_rates = await get_currency_rates_from_cbr(date, currency_codes)
-            for code, rate in currency_rates.items():
-                logger.info(f"  {code}: {rate} RUB")
-            missing = currency_codes - currency_rates.keys()
-            for code in missing:
-                logger.warning(f"  Could not fetch rate for {code}")
-        else:
-            currency_rates = {}
-
         total_rows = len(stocks_data)
-        successful = 0
-        error_count = 0
 
         mode_str = "REPARSE (ERROR rows only)" if reparse_mode else "FULL"
         logger.info(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')} [Mode: {mode_str}]")
         logger.info(f"Using batch size: {BATCH_SIZE} concurrent requests")
         logger.info("-" * 80)
 
+        # Phase 1: fetch prices and currencies from Investing.com
+        fetch_results = []
         for batch_start in range(0, total_rows, BATCH_SIZE):
             batch_end = min(batch_start + BATCH_SIZE, total_rows)
             batch = stocks_data[batch_start:batch_end]
 
             logger.info(
-                f"\nProcessing batch {batch_start // BATCH_SIZE + 1}/"
+                f"\nFetching batch {batch_start // BATCH_SIZE + 1}/"
                 f"{(total_rows + BATCH_SIZE - 1) // BATCH_SIZE} "
                 f"(stocks {batch_start + 1}-{batch_end})..."
             )
@@ -225,40 +212,65 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                 for i, stock in enumerate(batch)
             ]
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"  [{batch_start + i + 1}] Error: {result}")
-                    continue
-
-                row_num, stock_name, investing_price = result
-
-                logger.info(f"  [{batch_start + i + 1}] {stock_name}")
-
-                ws.cell(row_num, 4).value = date.strftime('%d.%m.%Y')
-
-                if investing_price is not None:
-                    normalized_price = normalize_price(investing_price)
-                    ws.cell(row_num, 5).value = normalized_price
-                    logger.info(f"    Investing.com: ✓ {normalized_price}")
-                    successful += 1
-
-                    currency = stocks_data[batch_start + i].get('currency')
-                    rate = currency_rates.get(currency) if currency else None
-                    if rate is not None:
-                        ws.cell(row_num, 7).value = rate
-                        ws.cell(row_num, 8).value = round(normalized_price * rate, 2)
-                    elif currency:
-                        logger.warning(f"    No rate available for currency: {currency}")
-                elif stocks_data[batch_start + i].get('investing_url'):
-                    ws.cell(row_num, 5).value = "ERROR"
-                    logger.info(f"    Investing.com: ✗ Not found (ERROR)")
-                    error_count += 1
-                else:
-                    logger.info(f"    Investing.com: ✗ No URL provided")
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            fetch_results.extend(zip(range(batch_start, batch_end), batch_results))
 
             await asyncio.sleep(0.3)
+
+        # Phase 2: fetch CBR rates for all currencies found
+        currency_codes = set()
+        for _, result in fetch_results:
+            if not isinstance(result, Exception):
+                _, _, _, currency = result
+                if currency:
+                    currency_codes.add(currency)
+
+        if currency_codes:
+            logger.info(f"\nFetching exchange rates from CBR for: {', '.join(sorted(currency_codes))}...")
+            currency_rates = await get_currency_rates_from_cbr(date, currency_codes)
+            for code, rate in currency_rates.items():
+                logger.info(f"  {code}: {rate} RUB")
+            missing = currency_codes - currency_rates.keys()
+            for code in missing:
+                logger.warning(f"  Could not fetch rate for {code}")
+        else:
+            currency_rates = {}
+
+        # Phase 3: write results to Excel
+        successful = 0
+        error_count = 0
+
+        for global_i, result in fetch_results:
+            if isinstance(result, Exception):
+                logger.error(f"  [{global_i + 1}] Error: {result}")
+                continue
+
+            row_num, stock_name, investing_price, currency = result
+
+            logger.info(f"  [{global_i + 1}] {stock_name}")
+
+            ws.cell(row_num, 4).value = date.strftime('%d.%m.%Y')
+
+            if investing_price is not None:
+                normalized_price = normalize_price(investing_price)
+                ws.cell(row_num, 5).value = normalized_price
+                if currency:
+                    ws.cell(row_num, 6).value = currency
+                logger.info(f"    Investing.com: ✓ {normalized_price} ({currency})")
+                successful += 1
+
+                rate = currency_rates.get(currency) if currency else None
+                if rate is not None:
+                    ws.cell(row_num, 7).value = rate
+                    ws.cell(row_num, 8).value = round(normalized_price * rate, 2)
+                elif currency:
+                    logger.warning(f"    No rate available for currency: {currency}")
+            elif stocks_data[global_i].get('investing_url'):
+                ws.cell(row_num, 5).value = "ERROR"
+                logger.info(f"    Investing.com: ✗ Not found (ERROR)")
+                error_count += 1
+            else:
+                logger.info(f"    Investing.com: ✗ No URL provided")
 
         logger.info("\n" + "=" * 80)
         summary = (
