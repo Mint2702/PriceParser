@@ -32,7 +32,7 @@ async def get_stock_id_async(stock_url: str) -> tuple[int, str | None]:
                     raise ValueError("instrument_id not found in identifiers object")
 
                 currency_tag = soup.find(attrs={"data-test": "currency-in-label"})
-                currency = currency_tag.get_text(strip=True) if currency_tag else None
+                currency = currency_tag.get_text(strip=True).split()[-1] if currency_tag else None
 
                 return stock_id, currency
                 
