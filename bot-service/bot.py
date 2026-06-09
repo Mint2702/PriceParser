@@ -34,6 +34,7 @@ WAITING_FOR_FILE, WAITING_FOR_DATE, WAITING_FOR_LIMIT, WAITING_FOR_REPARSE_FILE 
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_PROXY = os.getenv('TELEGRAM_PROXY')
 ALLOWED_USER_IDS_STR = os.getenv('ALLOWED_USER_IDS', '')
 JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
@@ -399,7 +400,7 @@ def main():
     else:
         logger.warning("Bot is accessible to EVERYONE. Set ALLOWED_USER_IDS to restrict access.")
     
-    application = (
+    builder = (
         Application.builder()
         .token(BOT_TOKEN)
         .post_init(post_init)
@@ -407,8 +408,10 @@ def main():
         .read_timeout(30.0)
         .write_timeout(30.0)
         .pool_timeout(30.0)
-        .build()
     )
+    if TELEGRAM_PROXY:
+        builder = builder.proxy(TELEGRAM_PROXY).get_updates_proxy(TELEGRAM_PROXY)
+    application = builder.build()
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('parse', parse_command)],
