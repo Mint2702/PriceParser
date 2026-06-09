@@ -3,4 +3,6 @@ curl-cffi==0.7.0
 beautifulsoup4==4.12.2
 lxml==4.9.3
 redis==5.2.1
+httpx[socks]
+python-telegram-bot[socks]
 

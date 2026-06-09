@@ -1,2 +1,4 @@
 python-telegram-bot==21.0
 redis==5.2.1
+httpx[socks]
+python-telegram-bot[socks]
