@@ -6,11 +6,14 @@ from bs4 import BeautifulSoup
 
 def get_stock_id(stock_url: str) -> int:
     client = requests.Session()
-    response = client.get(stock_url, timeout=30, impersonate="chrome120", headers={"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7", "Domain-Id": "ru"})
+    response = client.get(stock_url, timeout=30, impersonate="chrome131", headers={"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7", "Domain-Id": "ru"})
     data = response.text
 
     soup = BeautifulSoup(data, "html.parser")
-    script_data = soup.find("script", id="__NEXT_DATA__").text
+    script_tag = soup.find("script", id="__NEXT_DATA__")
+    if script_tag is None:
+        raise ValueError(f"__NEXT_DATA__ not found (status={response.status_code}, cloudflare challenge)")
+    script_data = script_tag.text
     
     match = re.search(r'"identifiers"\s*:\s*\{[^}]*"instrument_id"\s*:\s*"?(\d+)"?', script_data)
     if match:
@@ -26,7 +29,7 @@ def get_stock_data(stock_id: int, start_date: str, end_date: str) -> list[dict]:
 
     client = requests.Session()
 
-    response = client.get(url, timeout=30, impersonate="chrome120", headers={"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7", "Domain-Id": "ru"})
+    response = client.get(url, timeout=30, impersonate="chrome131", headers={"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7", "Domain-Id": "ru"})
 
     data = response.json()['data']
     results = []
