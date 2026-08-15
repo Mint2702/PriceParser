@@ -27,6 +27,7 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 WAITING_FOR_FILE, WAITING_FOR_DATE, WAITING_FOR_LIMIT, WAITING_FOR_REPARSE_FILE = range(4)
@@ -113,6 +114,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @authorized_only
 async def parse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    logger.info(f"User {user.id} (@{user.username or 'unknown'}) invoked /parse")
     await update.message.reply_text(
         "📁 Пожалуйста, отправьте мне Excel файл (шаблон котировок) для обработки."
     )
@@ -233,7 +236,12 @@ async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, li
 
     await r.xadd(JOBS_STREAM, job_data)
 
+    username = update.effective_user.username or "unknown"
     limit_text = f"первые {limit} строк" if limit is not None else "все строки"
+    logger.info(
+        f"User {user_id} (@{username}) started parse: file={original_filename}, "
+        f"date={date_str}, limit={limit_text}, job_id={job_id}"
+    )
     await msg.reply_text(
         f"🚀 Обработка начата!\n\n"
         f"📊 Файл: {original_filename}\n"
@@ -251,6 +259,8 @@ async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, li
 
 @authorized_only
 async def reparse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    logger.info(f"User {user.id} (@{user.username or 'unknown'}) invoked /reparse")
     await update.message.reply_text(
         "📁 Пожалуйста, отправьте мне Excel файл с ERROR в столбце H для повторной обработки."
     )
@@ -289,6 +299,11 @@ async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TY
     }
     
     await r.xadd(JOBS_STREAM, job_data)
+
+    username = update.effective_user.username or "unknown"
+    logger.info(
+        f"User {user_id} (@{username}) started reparse: file={document.file_name}, job_id={job_id}"
+    )
     
     await update.message.reply_text(
         f"🚀 Повторная обработка начата!\n\n"
@@ -356,8 +371,6 @@ async def process_result(application: Application, data: dict):
     user_id = int(data.get('user_id'))
     status = data.get('status')
     
-    logger.info(f"Received result for job {job_id}: {status}")
-    
     if status == 'success':
         file_content = bytes.fromhex(data.get('file_content'))
         filename = data.get('filename')
@@ -376,6 +389,7 @@ async def process_result(application: Application, data: dict):
             filename=output_filename,
             caption="Вот ваш обработанный файл 📊"
         )
+        logger.info(f"User {user_id} successfully received result for job {job_id} ({filename})")
     
     elif status == 'error':
         error_message = data.get('error', 'Unknown error')
@@ -384,6 +398,7 @@ async def process_result(application: Application, data: dict):
             chat_id=user_id,
             text=f"❌ Обработка не удалась!\n\nОшибка: {error_message}"
         )
+        logger.error(f"User {user_id} received error for job {job_id}: {error_message}")
 
 
 async def post_init(application: Application):
