@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import json
 import asyncio
 import logging
 import redis.asyncio as redis
@@ -23,10 +24,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class JobCancelled(Exception):
+    pass
+
+
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 JOBS_STREAM = 'us_parser:jobs'
 RESULTS_STREAM = 'us_parser:results'
+PROGRESS_CHANNEL = 'us_parser:progress'
+CANCEL_KEY_PREFIX = 'us_parser:cancel:'
 CONSUMER_GROUP = 'us_parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 5))
 
@@ -42,6 +50,35 @@ async def get_redis():
             decode_responses=True
         )
     return redis_client
+
+
+async def publish_progress(
+    job_id: str,
+    user_id: str,
+    current: int | None = None,
+    total: int | None = None,
+    date_str: str | None = None,
+) -> None:
+    try:
+        r = await get_redis()
+        payload = {
+            'job_id': job_id,
+            'user_id': str(user_id),
+        }
+        if current is not None:
+            payload['current'] = current
+        if total is not None:
+            payload['total'] = total
+        if date_str:
+            payload['date'] = date_str
+        await r.publish(PROGRESS_CHANNEL, json.dumps(payload))
+    except Exception as e:
+        logger.warning(f"Failed to publish progress for job {job_id}: {e}")
+
+
+async def is_job_cancelled(job_id: str) -> bool:
+    r = await get_redis()
+    return bool(await r.exists(f'{CANCEL_KEY_PREFIX}{job_id}'))
 
 
 def format_date_for_api(date: datetime) -> str:
@@ -117,7 +154,7 @@ async def process_single_stock_async(row_num: int, stock_name: str, investing_ur
     return row_num, stock_name, investing_price, currency, investing_error
 
 
-async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None) -> tuple[bytes, str]:
+async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None, on_progress=None, should_cancel=None) -> tuple[bytes, str]:
     temp_input = Path(f"/tmp/us_input_{os.getpid()}.xlsx")
     temp_output = Path(f"/tmp/us_output_{os.getpid()}.xlsx")
 
@@ -168,9 +205,18 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         logger.info(f"Using batch size: {BATCH_SIZE} concurrent requests")
         logger.info("-" * 80)
 
+        async def check_cancelled():
+            if should_cancel and await should_cancel():
+                raise JobCancelled()
+
+        await check_cancelled()
+        if on_progress:
+            await on_progress(0, total_rows)
+
         # Phase 1: fetch prices and currencies from Investing.com
         fetch_results = []
         for batch_start in range(0, total_rows, BATCH_SIZE):
+            await check_cancelled()
             batch_end = min(batch_start + BATCH_SIZE, total_rows)
             batch = stocks_data[batch_start:batch_end]
 
@@ -194,7 +240,12 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             fetch_results.extend(zip(range(batch_start, batch_end), batch_results))
 
+            if on_progress:
+                await on_progress(batch_end, total_rows)
+
             await asyncio.sleep(0.3)
+
+        await check_cancelled()
 
         # Phase 2: fetch CBR rates for all currencies found
         currency_codes = set()
@@ -214,6 +265,8 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                 logger.warning(f"  Could not fetch rate for {code}")
         else:
             currency_rates = {}
+
+        await check_cancelled()
 
         # Phase 3: write results to Excel
         successful = 0
@@ -316,8 +369,26 @@ async def process_job(job_data: dict):
     logger.info(f"📋 Limit: {limit if limit is not None else 'all rows'}")
     logger.info(f"{'=' * 80}\n")
 
+    await publish_progress(job_id, user_id, date_str=date_str)
+
+    async def on_progress(current: int, total: int) -> None:
+        await publish_progress(job_id, user_id, current, total, date_str=date_str)
+
+    async def should_cancel() -> bool:
+        return await is_job_cancelled(job_id)
+
     try:
-        result_content, summary = await process_excel_file(file_content, date, reparse_mode, limit)
+        result_content, summary = await process_excel_file(
+            file_content,
+            date,
+            reparse_mode,
+            limit,
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+        )
+
+        if await is_job_cancelled(job_id):
+            raise JobCancelled()
 
         r = await get_redis()
         result_data = {
@@ -326,11 +397,22 @@ async def process_job(job_data: dict):
             'status': 'success',
             'filename': filename,
             'file_content': result_content.hex(),
-            'summary': summary
+            'summary': summary,
+            'date': date_str,
         }
 
         await r.xadd(RESULTS_STREAM, result_data)
         logger.info(f"\n✅ Job {job_id} completed successfully!")
+
+    except JobCancelled:
+        logger.info(f"\n⏹ Job {job_id} cancelled")
+        r = await get_redis()
+        await r.xadd(RESULTS_STREAM, {
+            'job_id': job_id,
+            'user_id': user_id,
+            'status': 'cancelled',
+            'date': date_str,
+        })
 
     except Exception as e:
         logger.error(f"\n❌ Job {job_id} failed with error: {e}")
@@ -341,7 +423,8 @@ async def process_job(job_data: dict):
             'job_id': job_id,
             'user_id': user_id,
             'status': 'error',
-            'error': str(e)
+            'error': str(e),
+            'date': date_str,
         }
 
         await r.xadd(RESULTS_STREAM, error_data)

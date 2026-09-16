@@ -18,6 +18,7 @@ from telegram.ext import (
 from datetime import datetime
 from pathlib import Path
 import uuid
+import time
 from functools import wraps
 
 logging.basicConfig(
@@ -39,6 +40,10 @@ TELEGRAM_PROXY = os.getenv('TELEGRAM_PROXY')
 ALLOWED_USER_IDS_STR = os.getenv('ALLOWED_USER_IDS', '')
 JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
+PROGRESS_CHANNEL = 'parser:progress'
+PROGRESS_EDIT_INTERVAL = 1.5
+PROGRESS_BAR_WIDTH = 20
+CANCEL_KEY_PREFIX = 'parser:cancel:'
 CONSUMER_GROUP = 'bot-service'
 JOB_LOCK_KEY = 'parser:job_lock'
 JOB_LOCK_TTL = 7200
@@ -105,6 +110,18 @@ async def release_job_lock(job_id: str | None) -> None:
         await r.delete(JOB_LOCK_KEY)
 
 
+async def request_job_cancel(job_id: str) -> None:
+    r = await get_redis()
+    await r.set(f'{CANCEL_KEY_PREFIX}{job_id}', '1', ex=JOB_LOCK_TTL)
+
+
+async def clear_job_cancel(job_id: str | None) -> None:
+    if not job_id:
+        return
+    r = await get_redis()
+    await r.delete(f'{CANCEL_KEY_PREFIX}{job_id}')
+
+
 async def set_parse_cooldown() -> None:
     r = await get_redis()
     await r.set(COOLDOWN_KEY, '1', ex=COOLDOWN_SECONDS)
@@ -119,6 +136,167 @@ async def get_cooldown_remaining() -> int:
 def cooldown_message(remaining_seconds: int) -> str:
     minutes = max(1, (remaining_seconds + 59) // 60)
     return f'Следующий запуск будет доступен через {minutes} мин.'
+
+
+def progress_bar(current: int, total: int, width: int = PROGRESS_BAR_WIDTH) -> str:
+    if total <= 0:
+        filled = 0
+    else:
+        filled = min(width, round(width * current / total))
+    return '█' * filled + '░' * (width - filled)
+
+
+def format_progress_text(
+    filename: str,
+    *,
+    date_str: str | None = None,
+    limit_text: str | None = None,
+    reparse: bool = False,
+    current: int | None = None,
+    total: int | None = None,
+) -> str:
+    lines = ['🚀 Обработка файла...']
+    if filename:
+        lines.append(f'\n📊 Файл: {filename}')
+    if date_str:
+        lines.append(f'📅 Дата расчета: {date_str}')
+    if limit_text:
+        lines.append(f'📋 Лимит: {limit_text}')
+    if reparse:
+        lines.append('🔄 Режим: только строки с ERROR')
+
+    lines.append('')
+    if current is None or total is None:
+        lines.append('⏳ Подготовка...')
+    elif total <= 0:
+        lines.append('⏳ Нет строк для обработки')
+    else:
+        percent = min(100, int(current * 100 / total))
+        lines.append(f'⏳ {current}/{total} ({percent}%) {progress_bar(current, total)}')
+    return '\n'.join(lines)
+
+
+def format_result_text(title: str, date_str: str | None, body: str = '') -> str:
+    parts = [title]
+    if date_str:
+        parts.append(f'📅 Дата расчета: {date_str}')
+    if body:
+        parts.append(body)
+    return '\n\n'.join(parts)
+
+
+def cancel_job_markup(job_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton('Отменить расчет', callback_data=f'cancel_job:{job_id}')
+    ]])
+
+
+EMPTY_INLINE_KEYBOARD = InlineKeyboardMarkup([])
+
+
+def progress_store(application: Application) -> dict:
+    return application.bot_data.setdefault('progress_messages', {})
+
+
+def progress_lock(application: Application) -> asyncio.Lock:
+    lock = application.bot_data.get('progress_lock')
+    if lock is None:
+        lock = asyncio.Lock()
+        application.bot_data['progress_lock'] = lock
+    return lock
+
+
+async def start_progress_message(application: Application, chat_id: int, job_id: str, existing_message=None, **meta) -> None:
+    text = format_progress_text(
+        meta.get('filename', ''),
+        date_str=meta.get('date_str'),
+        limit_text=meta.get('limit_text'),
+        reparse=meta.get('reparse', False),
+    )
+    markup = cancel_job_markup(job_id)
+    sent = None
+    if existing_message:
+        try:
+            await existing_message.edit_text(text, reply_markup=markup)
+            sent = existing_message
+        except Exception:
+            sent = None
+    if sent is None:
+        sent = await application.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+    progress_store(application)[job_id] = {
+        'chat_id': sent.chat_id,
+        'message_id': sent.message_id,
+        'filename': meta.get('filename', ''),
+        'date_str': meta.get('date_str'),
+        'limit_text': meta.get('limit_text'),
+        'reparse': meta.get('reparse', False),
+        'last_edit': 0.0,
+        'last_text': text,
+    }
+
+
+async def apply_progress_update(application: Application, data: dict) -> None:
+    job_id = data.get('job_id')
+    async with progress_lock(application):
+        info = progress_store(application).get(job_id)
+        if not info or info.get('cancelling'):
+            return
+
+        date_changed = False
+        if data.get('date') and data.get('date') != info.get('date_str'):
+            info['date_str'] = data['date']
+            date_changed = True
+        if 'current' in data:
+            info['current'] = int(data['current'])
+        if 'total' in data:
+            info['total'] = int(data['total'])
+
+        current = info.get('current')
+        total = info.get('total')
+        now = time.monotonic()
+        is_final = total is not None and total > 0 and current is not None and current >= total
+        if not is_final and not date_changed and now - info.get('last_edit', 0) < PROGRESS_EDIT_INTERVAL:
+            return
+
+        text = format_progress_text(
+            info.get('filename', ''),
+            date_str=info.get('date_str'),
+            limit_text=info.get('limit_text'),
+            reparse=info.get('reparse', False),
+            current=current,
+            total=total,
+        )
+        if text == info.get('last_text'):
+            return
+
+        try:
+            await application.bot.edit_message_text(
+                chat_id=info['chat_id'],
+                message_id=info['message_id'],
+                text=text,
+                reply_markup=cancel_job_markup(job_id),
+            )
+            info['last_edit'] = now
+            info['last_text'] = text
+        except Exception:
+            pass
+
+
+async def finish_progress_message(application: Application, job_id: str | None, user_id: int, text: str) -> None:
+    async with progress_lock(application):
+        info = progress_store(application).pop(job_id, None) if job_id else None
+        if info:
+            try:
+                await application.bot.edit_message_text(
+                    chat_id=info['chat_id'],
+                    message_id=info['message_id'],
+                    text=text,
+                    reply_markup=EMPTY_INLINE_KEYBOARD,
+                )
+                return
+            except Exception:
+                pass
+    await application.bot.send_message(chat_id=user_id, text=text)
 
 
 async def delete_busy_notice(application: Application) -> None:
@@ -312,7 +490,13 @@ async def parse_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     started = await _send_parse_job(update, context, limit=None)
     if started:
-        await query.edit_message_text("✅ Выбрано: парсить все строки")
+        try:
+            await query.message.delete()
+        except Exception:
+            try:
+                await query.edit_message_text("✅ Выбрано: парсить все строки")
+            except Exception:
+                pass
     return ConversationHandler.END
 
 
@@ -370,13 +554,13 @@ async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, li
         f"User {user_id} (@{username}) started parse: file={original_filename}, "
         f"date={date_str}, limit={limit_text}, job_id={job_id}"
     )
-    await msg.reply_text(
-        f"🚀 Обработка начата!\n\n"
-        f"📊 Файл: {original_filename}\n"
-        f"📅 Дата: {date_str}\n"
-        f"📋 Лимит: {limit_text}\n\n"
-        f"⏳ Это может занять несколько минут. Я отправлю вам результат, когда он будет готов.\n\n"
-        f"ID задачи: {job_id}"
+    await start_progress_message(
+        context.application,
+        update.effective_chat.id,
+        job_id,
+        filename=original_filename,
+        date_str=date_str,
+        limit_text=limit_text,
     )
 
     context.user_data['job_id'] = job_id
@@ -411,7 +595,7 @@ async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return WAITING_FOR_REPARSE_FILE
     
-    await update.message.reply_text("⏳ Загружаю файл...")
+    loading_msg = await update.message.reply_text("⏳ Загружаю файл...")
     
     file = await document.get_file()
     file_path = Path(f"/tmp/{uuid.uuid4()}_{document.file_name}")
@@ -423,6 +607,10 @@ async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TY
     if not await acquire_job_lock(job_id):
         await notify_status(update, context, BUSY_MESSAGE)
         Path(file_path).unlink(missing_ok=True)
+        try:
+            await loading_msg.delete()
+        except Exception:
+            pass
         return ConversationHandler.END
 
     try:
@@ -450,12 +638,13 @@ async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TY
         f"User {user_id} (@{username}) started reparse: file={document.file_name}, job_id={job_id}"
     )
     
-    await update.message.reply_text(
-        f"🚀 Повторная обработка начата!\n\n"
-        f"📊 Файл: {document.file_name}\n"
-        f"🔄 Режим: только строки с ERROR\n\n"
-        f"⏳ Это может занять несколько минут. Я отправлю вам результат, когда он будет готов.\n\n"
-        f"ID задачи: {job_id}"
+    await start_progress_message(
+        context.application,
+        update.effective_chat.id,
+        job_id,
+        existing_message=loading_msg,
+        filename=document.file_name,
+        reparse=True,
     )
     
     Path(file_path).unlink(missing_ok=True)
@@ -476,6 +665,66 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     return ConversationHandler.END
+
+
+async def cancel_job_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    user_id = update.effective_user.id if update.effective_user else None
+    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        await query.answer('Нет доступа', show_alert=True)
+        return
+
+    job_id = query.data.split(':', 1)[1]
+    r = await get_redis()
+    current = await r.get(JOB_LOCK_KEY)
+    if current != job_id:
+        await query.answer('Расчет уже завершен')
+        try:
+            await query.edit_message_reply_markup(reply_markup=EMPTY_INLINE_KEYBOARD)
+        except Exception:
+            pass
+        return
+
+    await query.answer('Отменяю расчет...')
+    await request_job_cancel(job_id)
+
+    async with progress_lock(context.application):
+        info = progress_store(context.application).get(job_id)
+        if not info:
+            return
+        info['cancelling'] = True
+        text = format_result_text('⏳ Отменяю расчет...', info.get('date_str'))
+        try:
+            await query.edit_message_text(text, reply_markup=EMPTY_INLINE_KEYBOARD)
+            info['last_text'] = text
+        except Exception:
+            pass
+
+
+async def listen_for_progress(application: Application):
+    r = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        decode_responses=True
+    )
+    pubsub = r.pubsub()
+    await pubsub.subscribe(PROGRESS_CHANNEL)
+    logger.info(f"Listening for progress on channel: {PROGRESS_CHANNEL}")
+    try:
+        async for message in pubsub.listen():
+            if message.get('type') != 'message':
+                continue
+            try:
+                data = json.loads(message['data'])
+                await apply_progress_update(application, data)
+            except Exception as e:
+                logger.error(f"Error processing progress: {e}")
+    finally:
+        await pubsub.unsubscribe(PROGRESS_CHANNEL)
+        await r.aclose()
 
 
 async def listen_for_results(application: Application):
@@ -515,6 +764,8 @@ async def process_result(application: Application, data: dict):
     job_id = data.get('job_id')
     user_id = int(data.get('user_id'))
     status = data.get('status')
+    stored = progress_store(application).get(job_id) or {}
+    date_str = data.get('date') or stored.get('date_str')
 
     try:
         await delete_busy_notice(application)
@@ -526,9 +777,11 @@ async def process_result(application: Application, data: dict):
 
             output_filename = filename.replace('.xlsx', '_filled.xlsx')
 
-            await application.bot.send_message(
-                chat_id=user_id,
-                text=f"✅ Обработка завершена!\n\n{summary}"
+            await finish_progress_message(
+                application,
+                job_id,
+                user_id,
+                format_result_text('✅ Обработка завершена!', date_str, summary)
             )
 
             await application.bot.send_document(
@@ -542,18 +795,32 @@ async def process_result(application: Application, data: dict):
         elif status == 'error':
             error_message = data.get('error', 'Unknown error')
 
-            await application.bot.send_message(
-                chat_id=user_id,
-                text=f"❌ Обработка не удалась!\n\nОшибка: {error_message}"
+            await finish_progress_message(
+                application,
+                job_id,
+                user_id,
+                format_result_text('❌ Обработка не удалась!', date_str, f'Ошибка: {error_message}')
             )
             logger.error(f"User {user_id} received error for job {job_id}: {error_message}")
+
+        elif status == 'cancelled':
+            await finish_progress_message(
+                application,
+                job_id,
+                user_id,
+                format_result_text('❌ Расчет отменен', date_str)
+            )
+            logger.info(f"User {user_id} cancelled job {job_id}")
     finally:
         await release_job_lock(job_id)
-        await set_parse_cooldown()
+        await clear_job_cancel(job_id)
+        if status != 'cancelled':
+            await set_parse_cooldown()
 
 
 async def post_init(application: Application):
     asyncio.create_task(listen_for_results(application))
+    asyncio.create_task(listen_for_progress(application))
 
 
 def main():
@@ -608,6 +875,7 @@ def main():
     
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', help_command))
+    application.add_handler(CallbackQueryHandler(cancel_job_callback, pattern=r'^cancel_job:'))
     application.add_handler(conv_handler)
     application.add_handler(reparse_conv_handler)
     
