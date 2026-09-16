@@ -40,6 +40,9 @@ ALLOWED_USER_IDS_STR = os.getenv('US_ALLOWED_USER_IDS', '')
 JOBS_STREAM = 'us_parser:jobs'
 RESULTS_STREAM = 'us_parser:results'
 CONSUMER_GROUP = 'us-bot-service'
+JOB_LOCK_KEY = 'us_parser:job_lock'
+JOB_LOCK_TTL = 7200
+BUSY_MESSAGE = 'Расчет уже запущен. Подождите его окончания для следующего запуска'
 
 redis_client = None
 
@@ -81,6 +84,68 @@ async def get_redis():
     return redis_client
 
 
+async def is_job_running() -> bool:
+    r = await get_redis()
+    return bool(await r.exists(JOB_LOCK_KEY))
+
+
+async def acquire_job_lock(job_id: str) -> bool:
+    r = await get_redis()
+    return bool(await r.set(JOB_LOCK_KEY, job_id, nx=True, ex=JOB_LOCK_TTL))
+
+
+async def release_job_lock(job_id: str | None) -> None:
+    if not job_id:
+        return
+    r = await get_redis()
+    current = await r.get(JOB_LOCK_KEY)
+    if current == job_id:
+        await r.delete(JOB_LOCK_KEY)
+
+
+async def delete_busy_notice(application: Application) -> None:
+    notice = application.bot_data.pop('busy_notice', None)
+    if not notice:
+        return
+    try:
+        await application.bot.delete_message(
+            chat_id=notice['chat_id'],
+            message_id=notice['message_id'],
+        )
+    except Exception:
+        pass
+
+
+async def notify_job_busy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await delete_busy_notice(context.application)
+
+    query = update.callback_query
+    if query and query.message:
+        try:
+            await query.edit_message_text(BUSY_MESSAGE)
+            context.application.bot_data['busy_notice'] = {
+                'chat_id': query.message.chat_id,
+                'message_id': query.message.message_id,
+            }
+            return
+        except Exception:
+            pass
+
+    msg = update.effective_message
+    sent = await msg.reply_text(BUSY_MESSAGE)
+    context.application.bot_data['busy_notice'] = {
+        'chat_id': sent.chat_id,
+        'message_id': sent.message_id,
+    }
+
+
+async def reject_if_busy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not await is_job_running():
+        return False
+    await notify_job_busy(update, context)
+    return True
+
+
 @authorized_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -118,6 +183,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @authorized_only
 async def parse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await reject_if_busy(update, context):
+        return ConversationHandler.END
+
     user = update.effective_user
     logger.info(f"User {user.id} (@{user.username or 'unknown'}) invoked /parse")
     await update.message.reply_text(
@@ -127,6 +195,13 @@ async def parse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await reject_if_busy(update, context):
+        file_path = context.user_data.get('file_path')
+        if file_path:
+            Path(file_path).unlink(missing_ok=True)
+        context.user_data.clear()
+        return ConversationHandler.END
+
     document = update.message.document
 
     if not document.file_name.endswith(('.xlsx', '.xls')):
@@ -154,6 +229,13 @@ async def file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await reject_if_busy(update, context):
+        file_path = context.user_data.get('file_path')
+        if file_path:
+            Path(file_path).unlink(missing_ok=True)
+        context.user_data.clear()
+        return ConversationHandler.END
+
     date_str = update.message.text.strip()
 
     try:
@@ -184,6 +266,13 @@ async def date_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def limit_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await reject_if_busy(update, context):
+        file_path = context.user_data.get('file_path')
+        if file_path:
+            Path(file_path).unlink(missing_ok=True)
+        context.user_data.clear()
+        return ConversationHandler.END
+
     text = update.message.text.strip()
     try:
         limit = int(text)
@@ -202,12 +291,13 @@ async def limit_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def parse_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("✅ Выбрано: парсить все строки")
-    await _send_parse_job(update, context, limit=None)
+    started = await _send_parse_job(update, context, limit=None)
+    if started:
+        await query.edit_message_text("✅ Выбрано: парсить все строки")
     return ConversationHandler.END
 
 
-async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, limit: int | None):
+async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, limit: int | None) -> bool:
     file_path = context.user_data.get('file_path')
     original_filename = context.user_data.get('original_filename')
     date_str = context.user_data.get('date_str')
@@ -219,26 +309,36 @@ async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, li
         await msg.reply_text(
             "❌ Файл не найден. Пожалуйста, начните заново с команды /parse"
         )
-        return
+        return False
 
     job_id = str(uuid.uuid4())
 
-    with open(file_path, 'rb') as f:
-        file_content = f.read()
+    if not await acquire_job_lock(job_id):
+        await notify_job_busy(update, context)
+        Path(file_path).unlink(missing_ok=True)
+        context.user_data.clear()
+        return False
 
-    r = await get_redis()
+    try:
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
 
-    job_data = {
-        'job_id': job_id,
-        'user_id': str(user_id),
-        'filename': original_filename,
-        'date': date_str,
-        'file_content': file_content.hex(),
-    }
-    if limit is not None:
-        job_data['limit'] = str(limit)
+        r = await get_redis()
 
-    await r.xadd(JOBS_STREAM, job_data)
+        job_data = {
+            'job_id': job_id,
+            'user_id': str(user_id),
+            'filename': original_filename,
+            'date': date_str,
+            'file_content': file_content.hex(),
+        }
+        if limit is not None:
+            job_data['limit'] = str(limit)
+
+        await r.xadd(JOBS_STREAM, job_data)
+    except Exception:
+        await release_job_lock(job_id)
+        raise
 
     username = update.effective_user.username or "unknown"
     limit_text = f"первые {limit} строк" if limit is not None else "все строки"
@@ -259,10 +359,14 @@ async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, li
     context.user_data['chat_id'] = update.effective_chat.id
 
     Path(file_path).unlink(missing_ok=True)
+    return True
 
 
 @authorized_only
 async def reparse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await reject_if_busy(update, context):
+        return ConversationHandler.END
+
     user = update.effective_user
     logger.info(f"User {user.id} (@{user.username or 'unknown'}) invoked /reparse")
     await update.message.reply_text(
@@ -272,6 +376,9 @@ async def reparse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await reject_if_busy(update, context):
+        return ConversationHandler.END
+
     document = update.message.document
 
     if not document.file_name.endswith(('.xlsx', '.xls')):
@@ -286,23 +393,33 @@ async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TY
     file_path = Path(f"/tmp/{uuid.uuid4()}_{document.file_name}")
     await file.download_to_drive(file_path)
 
-    with open(file_path, 'rb') as f:
-        file_content = f.read()
-
     job_id = str(uuid.uuid4())
     user_id = update.effective_user.id
 
-    r = await get_redis()
+    if not await acquire_job_lock(job_id):
+        await notify_job_busy(update, context)
+        Path(file_path).unlink(missing_ok=True)
+        return ConversationHandler.END
 
-    job_data = {
-        'job_id': job_id,
-        'user_id': str(user_id),
-        'filename': document.file_name,
-        'file_content': file_content.hex(),
-        'mode': 'reparse',
-    }
+    try:
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
 
-    await r.xadd(JOBS_STREAM, job_data)
+        r = await get_redis()
+
+        job_data = {
+            'job_id': job_id,
+            'user_id': str(user_id),
+            'filename': document.file_name,
+            'file_content': file_content.hex(),
+            'mode': 'reparse',
+        }
+
+        await r.xadd(JOBS_STREAM, job_data)
+    except Exception:
+        await release_job_lock(job_id)
+        Path(file_path).unlink(missing_ok=True)
+        raise
 
     username = update.effective_user.username or "unknown"
     logger.info(
@@ -375,34 +492,39 @@ async def process_result(application: Application, data: dict):
     user_id = int(data.get('user_id'))
     status = data.get('status')
 
-    if status == 'success':
-        file_content = bytes.fromhex(data.get('file_content'))
-        filename = data.get('filename')
-        summary = data.get('summary', '')
+    try:
+        await delete_busy_notice(application)
 
-        output_filename = filename.replace('.xlsx', '_filled.xlsx')
+        if status == 'success':
+            file_content = bytes.fromhex(data.get('file_content'))
+            filename = data.get('filename')
+            summary = data.get('summary', '')
 
-        await application.bot.send_message(
-            chat_id=user_id,
-            text=f"✅ Обработка завершена!\n\n{summary}"
-        )
+            output_filename = filename.replace('.xlsx', '_filled.xlsx')
 
-        await application.bot.send_document(
-            chat_id=user_id,
-            document=file_content,
-            filename=output_filename,
-            caption="Вот ваш обработанный файл 📊"
-        )
-        logger.info(f"User {user_id} successfully received result for job {job_id} ({filename})")
+            await application.bot.send_message(
+                chat_id=user_id,
+                text=f"✅ Обработка завершена!\n\n{summary}"
+            )
 
-    elif status == 'error':
-        error_message = data.get('error', 'Unknown error')
+            await application.bot.send_document(
+                chat_id=user_id,
+                document=file_content,
+                filename=output_filename,
+                caption="Вот ваш обработанный файл 📊"
+            )
+            logger.info(f"User {user_id} successfully received result for job {job_id} ({filename})")
 
-        await application.bot.send_message(
-            chat_id=user_id,
-            text=f"❌ Обработка не удалась!\n\nОшибка: {error_message}"
-        )
-        logger.error(f"User {user_id} received error for job {job_id}: {error_message}")
+        elif status == 'error':
+            error_message = data.get('error', 'Unknown error')
+
+            await application.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ Обработка не удалась!\n\nОшибка: {error_message}"
+            )
+            logger.error(f"User {user_id} received error for job {job_id}: {error_message}")
+    finally:
+        await release_job_lock(job_id)
 
 
 async def post_init(application: Application):
