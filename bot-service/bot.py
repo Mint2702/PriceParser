@@ -42,6 +42,8 @@ RESULTS_STREAM = 'parser:results'
 CONSUMER_GROUP = 'bot-service'
 JOB_LOCK_KEY = 'parser:job_lock'
 JOB_LOCK_TTL = 7200
+COOLDOWN_KEY = 'parser:cooldown'
+COOLDOWN_SECONDS = 600
 BUSY_MESSAGE = 'Расчет уже запущен. Подождите его окончания для следующего запуска'
 
 redis_client = None
@@ -103,6 +105,22 @@ async def release_job_lock(job_id: str | None) -> None:
         await r.delete(JOB_LOCK_KEY)
 
 
+async def set_parse_cooldown() -> None:
+    r = await get_redis()
+    await r.set(COOLDOWN_KEY, '1', ex=COOLDOWN_SECONDS)
+
+
+async def get_cooldown_remaining() -> int:
+    r = await get_redis()
+    ttl = await r.ttl(COOLDOWN_KEY)
+    return ttl if ttl and ttl > 0 else 0
+
+
+def cooldown_message(remaining_seconds: int) -> str:
+    minutes = max(1, (remaining_seconds + 59) // 60)
+    return f'Следующий запуск будет доступен через {minutes} мин.'
+
+
 async def delete_busy_notice(application: Application) -> None:
     notice = application.bot_data.pop('busy_notice', None)
     if not notice:
@@ -116,13 +134,13 @@ async def delete_busy_notice(application: Application) -> None:
         pass
 
 
-async def notify_job_busy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def notify_status(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     await delete_busy_notice(context.application)
 
     query = update.callback_query
     if query and query.message:
         try:
-            await query.edit_message_text(BUSY_MESSAGE)
+            await query.edit_message_text(text)
             context.application.bot_data['busy_notice'] = {
                 'chat_id': query.message.chat_id,
                 'message_id': query.message.message_id,
@@ -132,7 +150,7 @@ async def notify_job_busy(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
 
     msg = update.effective_message
-    sent = await msg.reply_text(BUSY_MESSAGE)
+    sent = await msg.reply_text(text)
     context.application.bot_data['busy_notice'] = {
         'chat_id': sent.chat_id,
         'message_id': sent.message_id,
@@ -140,10 +158,15 @@ async def notify_job_busy(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def reject_if_busy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if not await is_job_running():
-        return False
-    await notify_job_busy(update, context)
-    return True
+    if await is_job_running():
+        await notify_status(update, context, BUSY_MESSAGE)
+        return True
+    remaining = await get_cooldown_remaining()
+    if remaining > 0:
+        await notify_status(update, context, cooldown_message(remaining))
+        return True
+    await delete_busy_notice(context.application)
+    return False
 
 
 @authorized_only
@@ -307,10 +330,15 @@ async def _send_parse_job(update: Update, context: ContextTypes.DEFAULT_TYPE, li
         )
         return False
 
+    if await reject_if_busy(update, context):
+        Path(file_path).unlink(missing_ok=True)
+        context.user_data.clear()
+        return False
+
     job_id = str(uuid.uuid4())
 
     if not await acquire_job_lock(job_id):
-        await notify_job_busy(update, context)
+        await notify_status(update, context, BUSY_MESSAGE)
         Path(file_path).unlink(missing_ok=True)
         context.user_data.clear()
         return False
@@ -393,7 +421,7 @@ async def reparse_file_received(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
 
     if not await acquire_job_lock(job_id):
-        await notify_job_busy(update, context)
+        await notify_status(update, context, BUSY_MESSAGE)
         Path(file_path).unlink(missing_ok=True)
         return ConversationHandler.END
 
@@ -521,6 +549,7 @@ async def process_result(application: Application, data: dict):
             logger.error(f"User {user_id} received error for job {job_id}: {error_message}")
     finally:
         await release_job_lock(job_id)
+        await set_parse_cooldown()
 
 
 async def post_init(application: Application):
