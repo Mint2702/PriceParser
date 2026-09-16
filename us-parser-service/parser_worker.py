@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import sys
-import json
 import asyncio
 import logging
 import redis.asyncio as redis
@@ -33,7 +32,8 @@ REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 JOBS_STREAM = 'us_parser:jobs'
 RESULTS_STREAM = 'us_parser:results'
-PROGRESS_CHANNEL = 'us_parser:progress'
+PROGRESS_KEY_PREFIX = 'us_parser:progress:'
+PROGRESS_KEY_TTL = 7200
 CANCEL_KEY_PREFIX = 'us_parser:cancel:'
 CONSUMER_GROUP = 'us_parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 5))
@@ -60,18 +60,19 @@ async def publish_progress(
     date_str: str | None = None,
 ) -> None:
     try:
-        r = await get_redis()
-        payload = {
-            'job_id': job_id,
-            'user_id': str(user_id),
-        }
+        mapping = {}
         if current is not None:
-            payload['current'] = current
+            mapping['current'] = str(current)
         if total is not None:
-            payload['total'] = total
+            mapping['total'] = str(total)
         if date_str:
-            payload['date'] = date_str
-        await r.publish(PROGRESS_CHANNEL, json.dumps(payload))
+            mapping['date'] = date_str
+        if not mapping:
+            return
+        r = await get_redis()
+        key = f'{PROGRESS_KEY_PREFIX}{job_id}'
+        await r.hset(key, mapping=mapping)
+        await r.expire(key, PROGRESS_KEY_TTL)
     except Exception as e:
         logger.warning(f"Failed to publish progress for job {job_id}: {e}")
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import sys
-import json
 import asyncio
 import logging
 import redis.asyncio as redis
@@ -40,9 +39,9 @@ TELEGRAM_PROXY = os.getenv('TELEGRAM_PROXY')
 ALLOWED_USER_IDS_STR = os.getenv('US_ALLOWED_USER_IDS', '')
 JOBS_STREAM = 'us_parser:jobs'
 RESULTS_STREAM = 'us_parser:results'
-PROGRESS_CHANNEL = 'us_parser:progress'
 PROGRESS_EDIT_INTERVAL = 1.5
 PROGRESS_BAR_WIDTH = 20
+PROGRESS_KEY_PREFIX = 'us_parser:progress:'
 CANCEL_KEY_PREFIX = 'us_parser:cancel:'
 CONSUMER_GROUP = 'us-bot-service'
 JOB_LOCK_KEY = 'us_parser:job_lock'
@@ -119,7 +118,7 @@ async def clear_job_cancel(job_id: str | None) -> None:
     if not job_id:
         return
     r = await get_redis()
-    await r.delete(f'{CANCEL_KEY_PREFIX}{job_id}')
+    await r.delete(f'{CANCEL_KEY_PREFIX}{job_id}', f'{PROGRESS_KEY_PREFIX}{job_id}')
 
 
 async def set_parse_cooldown() -> None:
@@ -242,10 +241,8 @@ async def apply_progress_update(application: Application, data: dict) -> None:
         if not info or info.get('cancelling'):
             return
 
-        date_changed = False
-        if data.get('date') and data.get('date') != info.get('date_str'):
+        if data.get('date'):
             info['date_str'] = data['date']
-            date_changed = True
         if 'current' in data:
             info['current'] = int(data['current'])
         if 'total' in data:
@@ -254,9 +251,6 @@ async def apply_progress_update(application: Application, data: dict) -> None:
         current = info.get('current')
         total = info.get('total')
         now = time.monotonic()
-        is_final = total is not None and total > 0 and current is not None and current >= total
-        if not is_final and not date_changed and now - info.get('last_edit', 0) < PROGRESS_EDIT_INTERVAL:
-            return
 
         text = format_progress_text(
             info.get('filename', ''),
@@ -278,8 +272,8 @@ async def apply_progress_update(application: Application, data: dict) -> None:
             )
             info['last_edit'] = now
             info['last_text'] = text
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to edit progress message for job {job_id}: {e}")
 
 
 async def finish_progress_message(application: Application, job_id: str | None, user_id: int, text: str) -> None:
@@ -709,26 +703,22 @@ async def cancel_job_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def listen_for_progress(application: Application):
-    r = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        decode_responses=True
-    )
-    pubsub = r.pubsub()
-    await pubsub.subscribe(PROGRESS_CHANNEL)
-    logger.info(f"Listening for progress on channel: {PROGRESS_CHANNEL}")
-    try:
-        async for message in pubsub.listen():
-            if message.get('type') != 'message':
-                continue
-            try:
-                data = json.loads(message['data'])
+    r = await get_redis()
+    logger.info("Polling job progress")
+    while True:
+        try:
+            jobs = list(progress_store(application).items())
+            for job_id, info in jobs:
+                if info.get('cancelling'):
+                    continue
+                data = await r.hgetall(f'{PROGRESS_KEY_PREFIX}{job_id}')
+                if not data:
+                    continue
+                data['job_id'] = job_id
                 await apply_progress_update(application, data)
-            except Exception as e:
-                logger.error(f"Error processing progress: {e}")
-    finally:
-        await pubsub.unsubscribe(PROGRESS_CHANNEL)
-        await r.aclose()
+        except Exception as e:
+            logger.error(f"Error polling progress: {e}")
+        await asyncio.sleep(PROGRESS_EDIT_INTERVAL)
 
 
 async def listen_for_results(application: Application):
