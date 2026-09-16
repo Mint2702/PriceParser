@@ -29,8 +29,6 @@ JOBS_STREAM = 'parser:jobs'
 RESULTS_STREAM = 'parser:results'
 CONSUMER_GROUP = 'parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 5))
-INVESTING_MAX_RETRIES = int(os.getenv('INVESTING_MAX_RETRIES', 3))
-INVESTING_RETRY_DELAY = float(os.getenv('INVESTING_RETRY_DELAY', 2.0))
 
 redis_client = None
 
@@ -105,6 +103,7 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
     num_trades = None
     volume = None
     investing_price = None
+    investing_error = False
     
     if ticker:
         try:
@@ -120,24 +119,13 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
             logger.error(f"  [{index}] {stock_name} - MOEX error: {e}")
     
     if investing_url and moex_price is not None:
-        for attempt in range(INVESTING_MAX_RETRIES):
-            try:
-                investing_price = await get_investing_price_async(investing_url, target_date)
-                if investing_price is not None:
-                    break
-                if attempt < INVESTING_MAX_RETRIES - 1:
-                    delay = INVESTING_RETRY_DELAY * (2 ** attempt)
-                    logger.warning(f"  [{index}] {stock_name} - Investing.com returned None, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})")
-                    await asyncio.sleep(delay)
-            except Exception as e:
-                if attempt < INVESTING_MAX_RETRIES - 1:
-                    delay = INVESTING_RETRY_DELAY * (2 ** attempt)
-                    logger.warning(f"  [{index}] {stock_name} - Investing.com error: {e}, retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})")
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(f"  [{index}] {stock_name} - Investing.com error after {INVESTING_MAX_RETRIES} attempts: {e}")
+        try:
+            investing_price = await get_investing_price_async(investing_url, target_date)
+        except Exception as e:
+            investing_error = True
+            logger.error(f"  [{index}] {stock_name} - Investing.com error: {e}")
     
-    return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price
+    return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price, investing_error
 
 
 async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None) -> tuple[bytes, str]:
@@ -242,7 +230,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                     logger.error(f"  [{batch_start + i + 1}] Error: {result}")
                     continue
                 
-                row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price = result
+                row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price, investing_error = result
                 
                 logger.info(f"  [{batch_start + i + 1}] {stock_name} ({ticker})")
                 
@@ -263,7 +251,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                     ws.cell(row_num, 8).value = normalized_price
                     logger.info(f"    Investing.com: ✓ ${normalized_price}")
                     successful_investing += 1
-                elif moex_price is not None:
+                elif investing_error:
                     ws.cell(row_num, 8).value = "ERROR"
                     logger.info(f"    Investing.com: ✗ Not found (ERROR)")
                     error_count += 1

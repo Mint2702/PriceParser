@@ -29,8 +29,6 @@ JOBS_STREAM = 'us_parser:jobs'
 RESULTS_STREAM = 'us_parser:results'
 CONSUMER_GROUP = 'us_parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 5))
-INVESTING_MAX_RETRIES = int(os.getenv('INVESTING_MAX_RETRIES', 3))
-INVESTING_RETRY_DELAY = float(os.getenv('INVESTING_RETRY_DELAY', 2.0))
 
 redis_client = None
 
@@ -107,35 +105,16 @@ async def process_single_stock_async(row_num: int, stock_name: str, investing_ur
                                      target_date: str, index: int):
     investing_price = None
     currency = None
+    investing_error = False
 
     if investing_url:
-        for attempt in range(INVESTING_MAX_RETRIES):
-            try:
-                investing_price, currency = await get_investing_price_async(investing_url, target_date)
-                if investing_price is not None:
-                    break
-                if attempt < INVESTING_MAX_RETRIES - 1:
-                    delay = INVESTING_RETRY_DELAY * (2 ** attempt)
-                    logger.warning(
-                        f"  [{index}] {stock_name} - Investing.com returned None, "
-                        f"retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})"
-                    )
-                    await asyncio.sleep(delay)
-            except Exception as e:
-                if attempt < INVESTING_MAX_RETRIES - 1:
-                    delay = INVESTING_RETRY_DELAY * (2 ** attempt)
-                    logger.warning(
-                        f"  [{index}] {stock_name} - Investing.com error: {e}, "
-                        f"retrying in {delay}s (attempt {attempt + 1}/{INVESTING_MAX_RETRIES})"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(
-                        f"  [{index}] {stock_name} - Investing.com error after "
-                        f"{INVESTING_MAX_RETRIES} attempts: {e}"
-                    )
+        try:
+            investing_price, currency = await get_investing_price_async(investing_url, target_date)
+        except Exception as e:
+            investing_error = True
+            logger.error(f"  [{index}] {stock_name} - Investing.com error: {e}")
 
-    return row_num, stock_name, investing_price, currency
+    return row_num, stock_name, investing_price, currency, investing_error
 
 
 async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None) -> tuple[bytes, str]:
@@ -221,7 +200,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         currency_codes = set()
         for _, result in fetch_results:
             if not isinstance(result, Exception):
-                _, _, _, currency = result
+                _, _, _, currency, _ = result
                 if currency:
                     currency_codes.add(currency)
 
@@ -245,7 +224,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                 logger.error(f"  [{global_i + 1}] Error: {result}")
                 continue
 
-            row_num, stock_name, investing_price, currency = result
+            row_num, stock_name, investing_price, currency, investing_error = result
 
             logger.info(f"  [{global_i + 1}] {stock_name}")
 
@@ -265,10 +244,12 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                     ws.cell(row_num, 8).value = round(normalized_price * rate, 2)
                 elif currency:
                     logger.warning(f"    No rate available for currency: {currency}")
-            elif stocks_data[global_i].get('investing_url'):
+            elif investing_error:
                 ws.cell(row_num, 5).value = "ERROR"
                 logger.info(f"    Investing.com: ✗ Not found (ERROR)")
                 error_count += 1
+            elif stocks_data[global_i].get('investing_url'):
+                logger.info(f"    Investing.com: ✗ Not found")
             else:
                 logger.info(f"    Investing.com: ✗ No URL provided")
 

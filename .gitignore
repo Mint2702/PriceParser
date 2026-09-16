@@ -16,6 +16,10 @@ ENV/
 *.xls
 !quotations_template.xlsx
 !quotations_template_lite.xlsx
+!tests/fixtures/*.xlsx
+
+# Tests
+.pytest_cache/
 
 # IDE
 .vscode/

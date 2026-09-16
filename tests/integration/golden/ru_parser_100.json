@@ -1,0 +1,806 @@
+{
+  "date": "15.09.2026",
+  "limit": 100,
+  "stocks": [
+    {
+      "row": 4,
+      "isin": "US9013841070",
+      "name": "2seventy bio, Inc. ORD SHS",
+      "ticker": "TSVT",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 5,
+      "isin": "US90214J1016",
+      "name": "2U, INC. ORDSHS",
+      "ticker": "TWOU",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 6,
+      "isin": "US88579Y1010",
+      "name": "3M Company",
+      "ticker": "MMM",
+      "moex_price": 4235.0,
+      "investing_price": 164.67
+    },
+    {
+      "row": 7,
+      "isin": "US2829141009",
+      "name": "8x8, Inc. ORD SHS",
+      "ticker": "EGHT",
+      "moex_price": 83.0,
+      "investing_price": 1.83
+    },
+    {
+      "row": 8,
+      "isin": "US8318652091",
+      "name": "A O Smith Ord Shs",
+      "ticker": "AOS",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 9,
+      "isin": "US0028241000",
+      "name": "Abbott Laboratories",
+      "ticker": "ABT",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 10,
+      "isin": "US00287Y1091",
+      "name": "AbbVie Inc.",
+      "ticker": "ABBV",
+      "moex_price": 7070.0,
+      "investing_price": 263.04
+    },
+    {
+      "row": 11,
+      "isin": "US0028962076",
+      "name": "Abercrombie & Fitch_ORDSH CL A",
+      "ticker": "ANF",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 12,
+      "isin": "US0036541003",
+      "name": "ABIOMED Ord Shs",
+      "ticker": "ABMD",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 13,
+      "isin": "US00402L1070",
+      "name": "Academy Sports Outdoors ORDSHS",
+      "ticker": "ASO",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 14,
+      "isin": "US0042251084",
+      "name": "Acadia Pharmaceuticals Ord Shs",
+      "ticker": "ACAD",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 15,
+      "isin": "IE00B4BNMY34",
+      "name": "Accenture",
+      "ticker": "ACN",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 16,
+      "isin": "US00507V1098",
+      "name": "Activision Blizzard, Inc.",
+      "ticker": "ATVI",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 17,
+      "isin": "DE000A1EWWW0",
+      "name": "Adidas AG",
+      "ticker": "ADSGn",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 18,
+      "isin": "US00724F1012",
+      "name": "Adobe Incorporated",
+      "ticker": "ADBE",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 19,
+      "isin": "US00751Y1064",
+      "name": "ADVANCE AUTO PARTS, INC ORDSHS",
+      "ticker": "AAP",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 20,
+      "isin": "US0079031078",
+      "name": "Advanced Micro Devices (AMD)",
+      "ticker": "AMD",
+      "moex_price": 12127.0,
+      "investing_price": 504.2
+    },
+    {
+      "row": 21,
+      "isin": "US0010551028",
+      "name": "AFLAC Ord Shs",
+      "ticker": "AFL",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 22,
+      "isin": "US00846U1016",
+      "name": "Agilent TechnologiesORD SHS",
+      "ticker": "A",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 23,
+      "isin": "US0091581068",
+      "name": "Air Products&Chemicals Inc Ord",
+      "ticker": "APD",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 24,
+      "isin": "US0090661010",
+      "name": "Airbnb, Inc. ORD SHS CL A",
+      "ticker": "ABNB",
+      "moex_price": 1509.0,
+      "investing_price": 168.32
+    },
+    {
+      "row": 25,
+      "isin": "US00971T1016",
+      "name": "Akamai TechnologiesORD SHS",
+      "ticker": "AKAM",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 26,
+      "isin": "US0116591092",
+      "name": "ALASKA AIR GROUP INC ORD SHS",
+      "ticker": "ALK",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 27,
+      "isin": "US0126531013",
+      "name": "Albemarle Ord Shs",
+      "ticker": "ALB",
+      "moex_price": 1039.0,
+      "investing_price": 113.45
+    },
+    {
+      "row": 28,
+      "isin": "US0138721065",
+      "name": "Alcoa",
+      "ticker": "AA",
+      "moex_price": 1421.0,
+      "investing_price": 46.52
+    },
+    {
+      "row": 29,
+      "isin": "US0162551016",
+      "name": "Align Technology, Inc. ORD SHS",
+      "ticker": "ALGN",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 30,
+      "isin": "US0188021085",
+      "name": "Alliant Energy Corp ORD SHS",
+      "ticker": "LNT",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 31,
+      "isin": "DE0008404005",
+      "name": "ALLIANZ",
+      "ticker": "ALVG",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 32,
+      "isin": "US0200021014",
+      "name": "ALLSTATE CORP / THE ORDSHS",
+      "ticker": "ALL",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 33,
+      "isin": "US02005N1000",
+      "name": "Ally Financial Inc. ORD SHS",
+      "ticker": "ALLY",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 34,
+      "isin": "US02079K3059",
+      "name": "Alphabet class A",
+      "ticker": "GOOGL",
+      "moex_price": 13103.0,
+      "investing_price": 344.98
+    },
+    {
+      "row": 35,
+      "isin": "US02079K1079",
+      "name": "Alphabet class C (Google)",
+      "ticker": "GOOG",
+      "moex_price": 13165.0,
+      "investing_price": 341.43
+    },
+    {
+      "row": 36,
+      "isin": "US02156B1035",
+      "name": "Alteryx, Inc.",
+      "ticker": "AYX",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 37,
+      "isin": "US02156K1034",
+      "name": "Altice USA, Inc. ORD SHS CL A",
+      "ticker": "ATUS",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 38,
+      "isin": "US02209S1033",
+      "name": "Altria",
+      "ticker": "MO",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 39,
+      "isin": "US02553E1064",
+      "name": "Am Eagle Outfitter Inc ORD SHS",
+      "ticker": "AEO",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 40,
+      "isin": "US0231351067",
+      "name": "Amazon.com, Inc. ",
+      "ticker": "AMZN",
+      "moex_price": 8380.0,
+      "investing_price": 248.42
+    },
+    {
+      "row": 41,
+      "isin": "US00165C3025",
+      "name": "AMC Entertainment Holdings",
+      "ticker": "AMC",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 42,
+      "isin": "US0236081024",
+      "name": "Ameren Corporation ORD SHS",
+      "ticker": "AEE",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 43,
+      "isin": "US02376R1023",
+      "name": "American Airlines",
+      "ticker": "AAL",
+      "moex_price": 296.0,
+      "investing_price": 12.77
+    },
+    {
+      "row": 44,
+      "isin": "US0255371017",
+      "name": "American Electr. Power ORD SHS",
+      "ticker": "AEP",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 45,
+      "isin": "US0258161092",
+      "name": "American Express Company",
+      "ticker": "AXP",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 46,
+      "isin": "US0268747849",
+      "name": "American International ORD SHS",
+      "ticker": "AIG",
+      "moex_price": 815.0,
+      "investing_price": 75.98
+    },
+    {
+      "row": 47,
+      "isin": "US03027X1000",
+      "name": "American Tower",
+      "ticker": "AMT",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 48,
+      "isin": "US0304201033",
+      "name": "American Water Works Co ORDSHS",
+      "ticker": "AWK",
+      "moex_price": 1106.0,
+      "investing_price": 138.02
+    },
+    {
+      "row": 49,
+      "isin": "US03076C1062",
+      "name": "Ameriprise Financial Inc ORDSH",
+      "ticker": "AMP",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 50,
+      "isin": "US0311001004",
+      "name": "AMETEK, INC. ORDSHS",
+      "ticker": "AME",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 51,
+      "isin": "US0311621009",
+      "name": "Amgen",
+      "ticker": "AMGN",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 52,
+      "isin": "US03152W1099",
+      "name": "Amicus Therapeutics ORD SHS",
+      "ticker": "FOLD",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 53,
+      "isin": "US0320951017",
+      "name": "Amphenol Corporation",
+      "ticker": "APH",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 54,
+      "isin": "US0326541051",
+      "name": "Analog Devices",
+      "ticker": "ADL",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 55,
+      "isin": "US03272L1089",
+      "name": "Anaplan, Inc. ORD SHS",
+      "ticker": "PLAN",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 56,
+      "isin": "US00183L1026",
+      "name": "ANGI ORD SHS CL A",
+      "ticker": "ANGI",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 57,
+      "isin": "US03662Q1058",
+      "name": "Ansys Ord Shs",
+      "ticker": "ANSS",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 58,
+      "isin": "US03743Q1085",
+      "name": "APA Corporation",
+      "ticker": "APA",
+      "moex_price": 354.0,
+      "investing_price": 47.41
+    },
+    {
+      "row": 59,
+      "isin": "US03783T1034",
+      "name": "AppHarvest, Inc. ORD SHS",
+      "ticker": "APPH",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 60,
+      "isin": "US0378331005",
+      "name": "Apple. Inc.",
+      "ticker": "AAPL",
+      "moex_price": 8700.0,
+      "investing_price": 331.34
+    },
+    {
+      "row": 61,
+      "isin": "US0382221051",
+      "name": "Applied Materials, Inc.",
+      "ticker": "AMAT",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 62,
+      "isin": "US03831W1080",
+      "name": "AppLovin Corp ORD SHS CL A",
+      "ticker": "APP",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 63,
+      "isin": "US03852U1060",
+      "name": "Aramark ORD SHS",
+      "ticker": "ARMK",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 64,
+      "isin": "US0394831020",
+      "name": "Archer Daniels Midland Ord Shs (ADM)",
+      "ticker": "ADM",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 65,
+      "isin": "US03969T1097",
+      "name": "Arcturus",
+      "ticker": "ARCT",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 66,
+      "isin": "US04010L1035",
+      "name": "ARES CAPORD SHS",
+      "ticker": "ARCC",
+      "moex_price": 500.0,
+      "investing_price": 19.37
+    },
+    {
+      "row": 67,
+      "isin": "US0404131064",
+      "name": "Arista Networks, Inc. ORD SHS",
+      "ticker": "ANET",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 68,
+      "isin": "US3635761097",
+      "name": "Arthur J Gallagher ORD SHS",
+      "ticker": "AJG",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 69,
+      "isin": "US04621X1081",
+      "name": "Assurant Ord Shs",
+      "ticker": "AIZ",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 70,
+      "isin": "US04634X1037",
+      "name": "Astra Space",
+      "ticker": "ASTR",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 71,
+      "isin": "US00206R1023",
+      "name": "AT&T",
+      "ticker": "AT",
+      "moex_price": 598.0,
+      "investing_price": 26.72
+    },
+    {
+      "row": 72,
+      "isin": "US0495601058",
+      "name": "Atmos Energy Ord Shs",
+      "ticker": "ATO",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 73,
+      "isin": "US0527691069",
+      "name": "AUTODESK INC ORD SHS",
+      "ticker": "ADSK",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 74,
+      "isin": "US0530151036",
+      "name": "Automatic Data Processing Ord (ADP)",
+      "ticker": "ADP",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 75,
+      "isin": "US0533321024",
+      "name": "AUTOZONE, INC. ORDSHS",
+      "ticker": "AZO",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 76,
+      "isin": "US05352A1007",
+      "name": "Avantor, Inc. ORD SHS",
+      "ticker": "AVTR",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 77,
+      "isin": "US0536111091",
+      "name": "Avery Dennison Corp ORD SHS",
+      "ticker": "AVY",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 78,
+      "isin": "US05464T1043",
+      "name": "Axsome",
+      "ticker": "AXSM",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 79,
+      "isin": "US05508R1068",
+      "name": "B&G Foods, Inc. ORD SHS",
+      "ticker": "BGS",
+      "moex_price": 111.0,
+      "investing_price": 3.16
+    },
+    {
+      "row": 80,
+      "isin": "US05722G1004",
+      "name": "Baker Hughes A Ge CO Cl A",
+      "ticker": "BKR",
+      "moex_price": 500.0,
+      "investing_price": 56.72
+    },
+    {
+      "row": 81,
+      "isin": "US0584981064",
+      "name": "Ball Corporation ORD SHS",
+      "ticker": "BALL",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 82,
+      "isin": "US0605051046",
+      "name": "Bank of America",
+      "ticker": "BAC",
+      "moex_price": 1693.0,
+      "investing_price": 59.52
+    },
+    {
+      "row": 83,
+      "isin": "US06684L1035",
+      "name": "Baozun",
+      "ticker": "BZUN",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 84,
+      "isin": "CA0679011084",
+      "name": "Barrick Gold",
+      "ticker": "GOLD",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 85,
+      "isin": "DE000BASF111",
+      "name": "BASF",
+      "ticker": "BAS",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 86,
+      "isin": "US0708301041",
+      "name": "Bath & Body Works, Inc ORD SHS",
+      "ticker": "BBWI",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 87,
+      "isin": "US0718131099",
+      "name": "Baxter International ORD SHS",
+      "ticker": "BAX",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 88,
+      "isin": "DE000BAY0017",
+      "name": "Bayer AG",
+      "ticker": "BAYN",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 89,
+      "isin": "US0758871091",
+      "name": "Becton Dickinson Ord Shs",
+      "ticker": "BDX",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 90,
+      "isin": "US0758961009",
+      "name": "Bed Bath & Beyond Inc. ORD SHS",
+      "ticker": "BBBY",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 91,
+      "isin": "US0846707026",
+      "name": "Berkshire Hathaway",
+      "ticker": "BRKB",
+      "moex_price": 16502.0,
+      "investing_price": 516.76
+    },
+    {
+      "row": 92,
+      "isin": "US0865161014",
+      "name": "Best Buy Co., Inc. ORD SHS",
+      "ticker": "BBY",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 93,
+      "isin": "US08862E1091",
+      "name": "Beyond Meat Ord Shs",
+      "ticker": "BYND",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 94,
+      "isin": "US0893021032",
+      "name": "Big Lots",
+      "ticker": "BIG",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 95,
+      "isin": "US0900431000",
+      "name": "BILL Holdings, Inc ORD SH",
+      "ticker": "BILL",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 96,
+      "isin": "US09062X1037",
+      "name": "Biogen",
+      "ticker": "BIIB",
+      "moex_price": 5867.0,
+      "investing_price": 216.17
+    },
+    {
+      "row": 97,
+      "isin": "US09061G1013",
+      "name": "BioMarin",
+      "ticker": "BMRN",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 98,
+      "isin": "US09075F3055",
+      "name": "Bionano Genomics, Inc. ORD SHS",
+      "ticker": "BNGO",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 99,
+      "isin": "US0905722072",
+      "name": "Bio-Rad Laborat ORD SHS CL A",
+      "ticker": "BIO",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 100,
+      "isin": "US09075P1057",
+      "name": "BioXcel ",
+      "ticker": "BTAI",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 101,
+      "isin": "US05550J1016",
+      "name": "BJs Wholesale Club Hld ORD SHS",
+      "ticker": "BJ",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 102,
+      "isin": "US09203E1055",
+      "name": "Black Diamond",
+      "ticker": "BDTX",
+      "moex_price": null,
+      "investing_price": null
+    },
+    {
+      "row": 103,
+      "isin": "US09247X1019",
+      "name": "BlackRock Inc.",
+      "ticker": "BLK",
+      "moex_price": null,
+      "investing_price": null
+    }
+  ]
+}

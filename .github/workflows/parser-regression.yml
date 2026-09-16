@@ -1,0 +1,23 @@
+name: Parser regression
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ru-parser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r parser_service/requirements.txt pytest
+      - name: Run parser regression
+        env:
+          PYTHONPATH: parser_service
+          BATCH_SIZE: "5"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: pytest tests/integration/test_parser_regression.py -v
