@@ -9,8 +9,8 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 HISTORY_LOOKBACK_DAYS = 10
-MAX_RETRIES = 3
 RETRY_DELAYS = [2, 4, 8]
+RETRY_DELAYS_429 = [8, 20, 60]
 RETRYABLE_STATUS = {403, 429, 500, 502, 503, 504}
 INVESTING_CONCURRENCY = 2
 
@@ -129,19 +129,23 @@ def _pick_close_price(results: list[dict], target_date: str) -> float | None:
 
 
 async def _retry(action, *, what: str, extra: str = ""):
-    for attempt in range(MAX_RETRIES):
+    attempt = 0
+    while True:
         try:
             return await action()
         except Exception as e:
             retryable = _is_retryable_exception(e)
+            delays = RETRY_DELAYS_429 if '429' in str(e) else RETRY_DELAYS
+            max_retries = len(delays) + 1
             suffix = f" {extra}" if extra else ""
-            if retryable and attempt < MAX_RETRIES - 1:
-                delay = RETRY_DELAYS[attempt]
+            if retryable and attempt < max_retries - 1:
+                delay = delays[attempt]
                 logger.warning(
-                    f"Investing {what} error (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
+                    f"Investing {what} error (attempt {attempt + 1}/{max_retries}): {e}. "
                     f"Retrying in {delay}s...{suffix}"
                 )
                 await asyncio.sleep(delay)
+                attempt += 1
                 continue
             logger.error(
                 f"Investing {what} failed after {attempt + 1} attempts: {e}.{suffix}"
