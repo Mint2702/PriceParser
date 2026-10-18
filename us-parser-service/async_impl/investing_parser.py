@@ -1,9 +1,11 @@
 import asyncio
 import contextvars
+import json
 import os
 import re
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlparse
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
@@ -14,14 +16,62 @@ HISTORY_LOOKBACK_DAYS = 10
 RETRY_DELAYS = [2, 4, 8]
 RETRY_DELAYS_429 = [8, 20, 60]
 RETRYABLE_STATUS = {403, 429, 500, 502, 503, 504}
-INVESTING_CONCURRENCY = 2
+INVESTING_CONCURRENCY = 1
+INVESTING_GAP_SECONDS = 2
+PROXY_POOL_COOLDOWN_SECONDS = 20
+PROXY_POOL_COOLDOWN_ROUNDS = 6
 _PROXIES = [
     item.strip()
     for item in os.getenv("INVESTING_PROXY", "").split(",")
     if item.strip()
 ]
+_ID_CACHE_PATH = Path(os.getenv("INVESTING_ID_CACHE", "/data/us_investing_instrument_ids.json"))
 
-STOCK_ID_CACHE: dict[str, tuple[int, str | None]] = {}
+
+def _load_id_cache() -> dict[str, tuple[int, str | None]]:
+    if not _ID_CACHE_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(_ID_CACHE_PATH.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Investing instrument cache unreadable: {e}")
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    loaded: dict[str, tuple[int, str | None]] = {}
+    for url, value in raw.items():
+        if not isinstance(value, dict):
+            continue
+        stock_id = value.get("id")
+        if isinstance(stock_id, int):
+            currency = value.get("currency")
+            loaded[str(url)] = (stock_id, currency if isinstance(currency, str) else None)
+    return loaded
+
+
+def _persist_id_cache() -> None:
+    payload = {
+        url: {"id": stock_id, "currency": currency}
+        for url, (stock_id, currency) in STOCK_ID_CACHE.items()
+    }
+    try:
+        _ID_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = _ID_CACHE_PATH.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload))
+        temporary.replace(_ID_CACHE_PATH)
+    except OSError as e:
+        logger.warning(f"Could not save Investing instrument cache: {e}")
+
+
+def _remember_stock_id(stock_url: str, stock_id: int, currency: str | None) -> None:
+    stored = (stock_id, currency)
+    if STOCK_ID_CACHE.get(stock_url) == stored:
+        return
+    STOCK_ID_CACHE[stock_url] = stored
+    _persist_id_cache()
+
+
+STOCK_ID_CACHE: dict[str, tuple[int, str | None]] = _load_id_cache()
 
 _semaphore: asyncio.Semaphore | None = None
 _proxy_in_use: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -76,6 +126,8 @@ def _session() -> AsyncSession:
         _pool_logged = True
         if _PROXIES:
             logger.info(f"Investing.com proxy pool: {len(_PROXIES)}")
+        if STOCK_ID_CACHE:
+            logger.info(f"Investing instrument cache: {len(STOCK_ID_CACHE)}")
     proxy = _pool.current
     _proxy_in_use.set(proxy)
     if proxy:
@@ -206,6 +258,7 @@ def _is_proxy_refusal(exc: Exception) -> bool:
 
 async def _retry(action, *, what: str, extra: str = ""):
     attempt = 0
+    cooldown_round = 0
     refused: set[str] = set()
     while True:
         try:
@@ -227,6 +280,16 @@ async def _retry(action, *, what: str, extra: str = ""):
                             f"Switching proxy {_proxy_label(failed_proxy)} -> "
                             f"{_proxy_label(new_proxy)}.{suffix}"
                         )
+                    continue
+                if cooldown_round < PROXY_POOL_COOLDOWN_ROUNDS:
+                    cooldown_round += 1
+                    refused.clear()
+                    logger.warning(
+                        f"Investing {what}: all {len(_PROXIES)} proxies refused ({e}). "
+                        f"Waiting {PROXY_POOL_COOLDOWN_SECONDS}s before retry "
+                        f"{cooldown_round}/{PROXY_POOL_COOLDOWN_ROUNDS}.{suffix}"
+                    )
+                    await asyncio.sleep(PROXY_POOL_COOLDOWN_SECONDS)
                     continue
                 logger.error(
                     f"Investing {what} failed, all {len(_PROXIES)} proxies refused: {e}.{suffix}"
@@ -253,6 +316,8 @@ async def _retry(action, *, what: str, extra: str = ""):
 
 async def _load_stock_id(session: AsyncSession, stock_url: str) -> tuple[int, str | None]:
     cached = STOCK_ID_CACHE.get(stock_url)
+    if cached is not None:
+        return cached
     response = await session.get(
         stock_url,
         timeout=30,
@@ -270,18 +335,16 @@ async def _load_stock_id(session: AsyncSession, stock_url: str) -> tuple[int, st
             f"__NEXT_DATA__ not found (status={response.status_code}): {snippet!r}"
         )
 
-    if cached is not None:
-        return cached
-
     match = re.search(
         r'"identifiers"\s*:\s*\{[^}]*"instrument_id"\s*:\s*"?(\d+)"?',
         script_tag.text,
     )
     if not match:
         raise ValueError("instrument_id not found in identifiers object")
-    result = (int(match.group(1)), _parse_currency(soup))
-    STOCK_ID_CACHE[stock_url] = result
-    return result
+    stock_id = int(match.group(1))
+    currency = _parse_currency(soup)
+    _remember_stock_id(stock_url, stock_id, currency)
+    return stock_id, currency
 
 
 async def _load_stock_data(
@@ -368,12 +431,17 @@ async def get_investing_price_async(stock_url: str, target_date: str) -> tuple[f
 
     async def _fetch() -> tuple[float | None, str | None]:
         async with _session() as session:
+            page_fetched = stock_url not in STOCK_ID_CACHE
             stock_id, currency = await _load_stock_id(session, stock_url)
-            await asyncio.sleep(0.3)
+            if page_fetched:
+                await asyncio.sleep(0.3)
             results = await _load_stock_data(
                 session, stock_id, start_date, target_date, stock_url
             )
             return _pick_close_price(results, target_date), currency
 
     async with _get_semaphore():
-        return await _retry(_fetch, what="get_price", extra=f"Url: {stock_url}")
+        try:
+            return await _retry(_fetch, what="get_price", extra=f"Url: {stock_url}")
+        finally:
+            await asyncio.sleep(INVESTING_GAP_SECONDS)

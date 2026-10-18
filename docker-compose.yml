@@ -49,6 +49,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    volumes:
+      - investing-cache:/data
     restart: unless-stopped
     networks:
       - priceparser-network
@@ -91,6 +93,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    volumes:
+      - investing-cache:/data
     restart: unless-stopped
     networks:
       - priceparser-network
@@ -99,6 +103,7 @@ services:
 
 volumes:
   redis-data:
+  investing-cache:
 
 networks:
   priceparser-network:
