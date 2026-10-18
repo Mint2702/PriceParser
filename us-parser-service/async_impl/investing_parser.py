@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import os
 import re
 import logging
@@ -14,20 +15,71 @@ RETRY_DELAYS = [2, 4, 8]
 RETRY_DELAYS_429 = [8, 20, 60]
 RETRYABLE_STATUS = {403, 429, 500, 502, 503, 504}
 INVESTING_CONCURRENCY = 2
-INVESTING_PROXY = os.getenv("INVESTING_PROXY", "").strip() or None
+_PROXIES = [
+    item.strip()
+    for item in os.getenv("INVESTING_PROXY", "").split(",")
+    if item.strip()
+]
 
 STOCK_ID_CACHE: dict[str, tuple[int, str | None]] = {}
 
 _semaphore: asyncio.Semaphore | None = None
+_proxy_in_use: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "investing_proxy", default=None
+)
 
 
 class RetryableInvestingError(Exception):
     pass
 
 
+class _ProxyPool:
+    def __init__(self, proxies: list[str]):
+        self._proxies = proxies
+        self._index = 0
+        self._lock = asyncio.Lock()
+
+    @property
+    def current(self) -> str | None:
+        if not self._proxies:
+            return None
+        return self._proxies[self._index]
+
+    async def rotate_if_current(self, failed: str | None) -> str | None:
+        if not failed or not self._proxies:
+            return None
+        async with self._lock:
+            if self._proxies[self._index] != failed:
+                return None
+            self._index = (self._index + 1) % len(self._proxies)
+            return self._proxies[self._index]
+
+
+_pool = _ProxyPool(_PROXIES)
+_pool_logged = False
+
+
+def _proxy_label(proxy: str | None) -> str:
+    if not proxy:
+        return "direct"
+    parsed = urlparse(proxy)
+    if not parsed.hostname:
+        return "proxy"
+    if parsed.port:
+        return f"{parsed.hostname}:{parsed.port}"
+    return parsed.hostname
+
+
 def _session() -> AsyncSession:
-    if INVESTING_PROXY:
-        return AsyncSession(proxy=INVESTING_PROXY)
+    global _pool_logged
+    if not _pool_logged:
+        _pool_logged = True
+        if _PROXIES:
+            logger.info(f"Investing.com proxy pool: {len(_PROXIES)}")
+    proxy = _pool.current
+    _proxy_in_use.set(proxy)
+    if proxy:
+        return AsyncSession(proxy=proxy)
     return AsyncSession()
 
 
@@ -147,16 +199,43 @@ def _parse_currency(soup: BeautifulSoup) -> str | None:
     return token[1:] if len(token) > 1 else token
 
 
+def _is_proxy_refusal(exc: Exception) -> bool:
+    text = str(exc)
+    return "HTTP 429" in text or "HTTP 403" in text
+
+
 async def _retry(action, *, what: str, extra: str = ""):
     attempt = 0
+    refused: set[str] = set()
     while True:
         try:
             return await action()
         except Exception as e:
-            retryable = _is_retryable_exception(e)
-            delays = RETRY_DELAYS_429 if '429' in str(e) else RETRY_DELAYS
-            max_retries = len(delays) + 1
             suffix = f" {extra}" if extra else ""
+            failed_proxy = _proxy_in_use.get()
+            if (
+                _is_proxy_refusal(e)
+                and len(_PROXIES) > 1
+                and failed_proxy in _PROXIES
+            ):
+                refused.add(failed_proxy)
+                new_proxy = await _pool.rotate_if_current(failed_proxy)
+                if len(refused) < len(_PROXIES):
+                    if new_proxy:
+                        logger.warning(
+                            f"Investing {what} error: {e}. "
+                            f"Switching proxy {_proxy_label(failed_proxy)} -> "
+                            f"{_proxy_label(new_proxy)}.{suffix}"
+                        )
+                    continue
+                logger.error(
+                    f"Investing {what} failed, all {len(_PROXIES)} proxies refused: {e}.{suffix}"
+                )
+                raise
+
+            retryable = _is_retryable_exception(e)
+            delays = RETRY_DELAYS_429 if _is_proxy_refusal(e) else RETRY_DELAYS
+            max_retries = len(delays) + 1
             if retryable and attempt < max_retries - 1:
                 delay = delays[attempt]
                 logger.warning(
