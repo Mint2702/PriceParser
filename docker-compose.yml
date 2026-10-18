@@ -39,6 +39,8 @@ services:
       context: ./parser_service
       dockerfile: Dockerfile
     container_name: priceparser-worker
+    env_file:
+      - .env
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -79,6 +81,8 @@ services:
       context: ./us-parser-service
       dockerfile: Dockerfile
     container_name: priceparser-us-worker
+    env_file:
+      - .env
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379

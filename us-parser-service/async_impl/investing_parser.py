@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 import logging
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,7 @@ RETRY_DELAYS = [2, 4, 8]
 RETRY_DELAYS_429 = [8, 20, 60]
 RETRYABLE_STATUS = {403, 429, 500, 502, 503, 504}
 INVESTING_CONCURRENCY = 2
+INVESTING_PROXY = os.getenv("INVESTING_PROXY", "").strip() or None
 
 STOCK_ID_CACHE: dict[str, tuple[int, str | None]] = {}
 
@@ -21,6 +23,12 @@ _semaphore: asyncio.Semaphore | None = None
 
 class RetryableInvestingError(Exception):
     pass
+
+
+def _session() -> AsyncSession:
+    if INVESTING_PROXY:
+        return AsyncSession(proxy=INVESTING_PROXY)
+    return AsyncSession()
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -255,7 +263,7 @@ async def _load_stock_data(
 
 async def get_stock_id_async(stock_url: str) -> tuple[int, str | None]:
     async def _fetch() -> tuple[int, str | None]:
-        async with AsyncSession() as session:
+        async with _session() as session:
             return await _load_stock_id(session, stock_url)
 
     return await _retry(_fetch, what="get_stock_id", extra=f"Url: {stock_url}")
@@ -268,7 +276,7 @@ async def get_stock_data_async(
     stock_url: str | None = None,
 ) -> list[dict]:
     async def _fetch() -> list[dict]:
-        async with AsyncSession() as session:
+        async with _session() as session:
             return await _load_stock_data(session, stock_id, start_date, end_date, stock_url)
 
     return await _retry(_fetch, what="get_stock_data")
@@ -280,7 +288,7 @@ async def get_investing_price_async(stock_url: str, target_date: str) -> tuple[f
     ).strftime('%Y-%m-%d')
 
     async def _fetch() -> tuple[float | None, str | None]:
-        async with AsyncSession() as session:
+        async with _session() as session:
             stock_id, currency = await _load_stock_id(session, stock_url)
             await asyncio.sleep(0.3)
             results = await _load_stock_data(
