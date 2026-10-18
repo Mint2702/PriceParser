@@ -25,15 +25,15 @@ fi
 echo "✅ Environment configured"
 echo ""
 echo "🛑 Stopping and removing old containers..."
-docker-compose down
+docker compose down
 
 echo ""
 echo "🧹 Cleaning up old images and containers..."
-docker-compose rm -f
+docker compose rm -f
 
 echo ""
 echo "🐳 Building and starting Docker containers..."
-docker-compose up --build -d
+docker compose up --build -d
 
 echo ""
 echo "⏳ Waiting for services to start..."
@@ -41,7 +41,7 @@ sleep 5
 
 echo ""
 echo "📊 Service Status:"
-docker-compose ps
+docker compose ps
 
 echo ""
 echo "✅ Bot is running!"
@@ -52,8 +52,8 @@ echo "   2. Send /start to begin"
 echo "   3. Use /parse to process Excel files"
 echo ""
 echo "📋 Useful commands:"
-echo "   View logs:        docker-compose logs -f"
-echo "   Stop services:    docker-compose down"
-echo "   Restart:          docker-compose restart"
+echo "   View logs:        docker compose logs -f"
+echo "   Stop services:    docker compose down"
+echo "   Restart:          docker compose restart"
 echo ""
 

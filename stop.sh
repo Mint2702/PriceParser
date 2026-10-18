@@ -5,7 +5,7 @@ echo "=========================================="
 echo ""
 
 echo "Stopping all containers..."
-docker-compose down
+docker compose down
 
 echo ""
 echo "✅ All services stopped!"
