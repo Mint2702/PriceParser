@@ -14,7 +14,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from datetime import datetime
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 import uuid
 import time
@@ -49,6 +49,16 @@ JOB_LOCK_TTL = 7200
 COOLDOWN_KEY = 'parser:cooldown'
 COOLDOWN_SECONDS = 600
 BUSY_MESSAGE = 'Расчет уже запущен. Подождите его окончания для следующего запуска'
+MSK = timezone(timedelta(hours=3))
+AUTO_PARSE_HOUR = int(os.getenv('AUTO_PARSE_HOUR', '6'))
+AUTO_PARSE_CATCHUP_HOUR = min(23, AUTO_PARSE_HOUR + 6)
+AUTO_PARSE_FILE = Path(os.getenv('AUTO_PARSE_FILE', '/app/templates/quotations_template.xlsx'))
+AUTO_RUN_KEY_PREFIX = 'parser:auto_run:'
+AUTO_ACTIVE_KEY = 'parser:auto_active'
+AUTO_NOTIFY_PREFIX = 'parser:auto_notify:'
+AUTO_META_PREFIX = 'parser:auto_meta:'
+AUTO_KEY_TTL = 24 * 3600
+AUTO_RUN_TTL = 48 * 3600
 
 redis_client = None
 
@@ -151,10 +161,11 @@ def format_progress_text(
     date_str: str | None = None,
     limit_text: str | None = None,
     reparse: bool = False,
+    auto: bool = False,
     current: int | None = None,
     total: int | None = None,
 ) -> str:
-    lines = ['🚀 Обработка файла...']
+    lines = ['🌙 Автоматический расчет' if auto else '🚀 Обработка файла...']
     if filename:
         lines.append(f'\n📊 Файл: {filename}')
     if date_str:
@@ -163,6 +174,8 @@ def format_progress_text(
         lines.append(f'📋 Лимит: {limit_text}')
     if reparse:
         lines.append('🔄 Режим: только строки с ERROR')
+    if auto:
+        lines.append('🐢 Медленный режим')
 
     lines.append('')
     if current is None or total is None:
@@ -346,6 +359,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Добро пожаловать в бот парсинга цен акций!\n\n"
         "Отправьте мне Excel файл (шаблон котировок) и я загружу актуальные цены акций.\n\n"
+        "Каждый день в 6:00 МСК бот сам считает предыдущий день и присылает файл.\n\n"
         "Команды:\n"
         "/parse - Начать обработку нового файла\n"
         "/reparse - Обработать только строки с ERROR в столбце H\n"
@@ -368,6 +382,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. Отправьте команду /reparse\n"
         "2. Загрузите Excel файл со строками с ERROR в столбце H\n"
         "3. Бот повторно обработает только строки с ошибками\n\n"
+        "Автоматический расчет идет каждый день в 6:00 МСК за предыдущий день. "
+        "Файл приходит сам, запросы идут по одному с паузой 30–90 секунд.\n\n"
         "Используйте /cancel для отмены текущей операции."
     )
 
@@ -687,15 +703,32 @@ async def cancel_job_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     async with progress_lock(context.application):
         info = progress_store(context.application).get(job_id)
-        if not info:
+        if info:
+            info['cancelling'] = True
+            text = format_result_text('⏳ Отменяю расчет...', info.get('date_str'))
+            try:
+                await query.edit_message_text(text, reply_markup=EMPTY_INLINE_KEYBOARD)
+                info['last_text'] = text
+            except Exception:
+                pass
             return
-        info['cancelling'] = True
-        text = format_result_text('⏳ Отменяю расчет...', info.get('date_str'))
-        try:
-            await query.edit_message_text(text, reply_markup=EMPTY_INLINE_KEYBOARD)
-            info['last_text'] = text
-        except Exception:
-            pass
+
+        notices = await r.hgetall(f'{AUTO_NOTIFY_PREFIX}{job_id}')
+        if not notices:
+            return
+        meta = await r.hgetall(f'{AUTO_META_PREFIX}{job_id}')
+        text = format_result_text('⏳ Отменяю расчет...', meta.get('date'))
+        context.application.bot_data.setdefault('auto_progress_text', {})[job_id] = text
+        for uid, message_id in notices.items():
+            try:
+                await context.application.bot.edit_message_text(
+                    chat_id=int(uid),
+                    message_id=int(message_id),
+                    text=text,
+                    reply_markup=EMPTY_INLINE_KEYBOARD,
+                )
+            except Exception:
+                pass
 
 
 async def listen_for_progress(application: Application):
@@ -712,6 +745,7 @@ async def listen_for_progress(application: Application):
                     continue
                 data['job_id'] = job_id
                 await apply_progress_update(application, data)
+            await apply_auto_progress(application)
         except Exception as e:
             logger.error(f"Error polling progress: {e}")
         await asyncio.sleep(PROGRESS_EDIT_INTERVAL)
@@ -726,6 +760,7 @@ async def listen_for_results(application: Application):
         pass
     
     logger.info(f"Listening for results on stream: {RESULTS_STREAM}")
+    await consume_pending_results(application, r)
     
     while True:
         try:
@@ -752,13 +787,19 @@ async def listen_for_results(application: Application):
 
 async def process_result(application: Application, data: dict):
     job_id = data.get('job_id')
-    user_id = int(data.get('user_id'))
     status = data.get('status')
+    broadcast = data.get('broadcast') == '1'
+    user_id = int(data['user_id']) if data.get('user_id') else 0
     stored = progress_store(application).get(job_id) or {}
     date_str = data.get('date') or stored.get('date_str')
 
     try:
         await delete_busy_notice(application)
+
+        if broadcast:
+            await deliver_auto_result(application, data)
+            logger.info(f"Auto parse job {job_id} finished with status {status}")
+            return
 
         if status == 'success':
             file_content = bytes.fromhex(data.get('file_content'))
@@ -804,13 +845,301 @@ async def process_result(application: Application, data: dict):
     finally:
         await release_job_lock(job_id)
         await clear_job_cancel(job_id)
-        if status != 'cancelled':
+        if broadcast:
+            r = await get_redis()
+            keys = [f'{AUTO_NOTIFY_PREFIX}{job_id}', f'{AUTO_META_PREFIX}{job_id}']
+            active = await r.get(AUTO_ACTIVE_KEY)
+            if active == job_id:
+                keys.append(AUTO_ACTIVE_KEY)
+            await r.delete(*keys)
+            application.bot_data.get('auto_progress_text', {}).pop(job_id, None)
+        elif status != 'cancelled':
             await set_parse_cooldown()
+
+
+def msk_now() -> datetime:
+    return datetime.now(MSK)
+
+
+def in_auto_window(now: datetime) -> bool:
+    start = now.replace(hour=AUTO_PARSE_HOUR, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=AUTO_PARSE_CATCHUP_HOUR, minute=0, second=0, microsecond=0)
+    return start <= now < end
+
+
+def upcoming_auto_slot(now: datetime) -> datetime:
+    slot = now.replace(hour=AUTO_PARSE_HOUR, minute=0, second=0, microsecond=0)
+    if slot <= now:
+        slot += timedelta(days=1)
+    return slot
+
+
+async def auto_marker(day: date) -> str | None:
+    r = await get_redis()
+    return await r.get(f'{AUTO_RUN_KEY_PREFIX}{day.isoformat()}')
+
+
+async def set_auto_marker(day: date, value: str) -> None:
+    r = await get_redis()
+    await r.set(f'{AUTO_RUN_KEY_PREFIX}{day.isoformat()}', value, ex=AUTO_RUN_TTL)
+
+
+async def broadcast_text(application: Application, text: str) -> None:
+    for user_id in sorted(ALLOWED_USER_IDS):
+        try:
+            await application.bot.send_message(chat_id=user_id, text=text)
+        except Exception as e:
+            logger.error(f"Failed to message user {user_id}: {e}")
+
+
+async def apply_auto_progress(application: Application) -> None:
+    r = await get_redis()
+    async with progress_lock(application):
+        job_id = await r.get(AUTO_ACTIVE_KEY)
+        if not job_id or await r.exists(f'{CANCEL_KEY_PREFIX}{job_id}'):
+            return
+        data = await r.hgetall(f'{PROGRESS_KEY_PREFIX}{job_id}')
+        if not data:
+            return
+        notices = await r.hgetall(f'{AUTO_NOTIFY_PREFIX}{job_id}')
+        if not notices:
+            return
+        meta = await r.hgetall(f'{AUTO_META_PREFIX}{job_id}')
+        current = int(data['current']) if 'current' in data else None
+        total = int(data['total']) if 'total' in data else None
+        text = format_progress_text(
+            meta.get('filename', ''),
+            date_str=data.get('date') or meta.get('date'),
+            limit_text='все строки',
+            auto=True,
+            current=current,
+            total=total,
+        )
+        last = application.bot_data.setdefault('auto_progress_text', {})
+        if last.get(job_id) == text:
+            return
+        for uid, message_id in notices.items():
+            try:
+                await application.bot.edit_message_text(
+                    chat_id=int(uid),
+                    message_id=int(message_id),
+                    text=text,
+                    reply_markup=cancel_job_markup(job_id),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to edit auto progress for user {uid}: {e}")
+        last[job_id] = text
+        await r.expire(AUTO_ACTIVE_KEY, AUTO_KEY_TTL)
+        await r.expire(f'{AUTO_NOTIFY_PREFIX}{job_id}', AUTO_KEY_TTL)
+        await r.expire(f'{AUTO_META_PREFIX}{job_id}', AUTO_KEY_TTL)
+
+
+async def deliver_auto_result(application: Application, data: dict) -> None:
+    job_id = data.get('job_id')
+    status = data.get('status')
+    r = await get_redis()
+    async with progress_lock(application):
+        active = await r.get(AUTO_ACTIVE_KEY)
+        if active == job_id:
+            await r.delete(AUTO_ACTIVE_KEY)
+        notices = await r.hgetall(f'{AUTO_NOTIFY_PREFIX}{job_id}')
+        meta = await r.hgetall(f'{AUTO_META_PREFIX}{job_id}')
+        date_str = data.get('date') or meta.get('date')
+        if status == 'success':
+            text = format_result_text(
+                '✅ Автоматический расчет завершен!',
+                date_str,
+                data.get('summary', ''),
+            )
+        elif status == 'cancelled':
+            text = format_result_text('❌ Автоматический расчет отменен', date_str)
+        else:
+            error_message = data.get('error', 'Unknown error')
+            text = format_result_text(
+                '❌ Автоматический расчет не удался!',
+                date_str,
+                f'Ошибка: {error_message}',
+            )
+        delivered: set[int] = set()
+        for uid, message_id in notices.items():
+            try:
+                await application.bot.edit_message_text(
+                    chat_id=int(uid),
+                    message_id=int(message_id),
+                    text=text,
+                    reply_markup=EMPTY_INLINE_KEYBOARD,
+                )
+                delivered.add(int(uid))
+            except Exception as e:
+                logger.warning(f"Failed to edit auto result for user {uid}: {e}")
+        application.bot_data.get('auto_progress_text', {}).pop(job_id, None)
+
+    if status == 'success':
+        file_content = bytes.fromhex(data.get('file_content'))
+        filename = data.get('filename') or 'quotations.xlsx'
+        stem = Path(filename).stem
+        output_filename = f"{stem}_{date_str}.xlsx" if date_str else f"{stem}_filled.xlsx"
+        caption = f"Автоматический расчет за {date_str}" if date_str else "Автоматический расчет"
+        for user_id in sorted(ALLOWED_USER_IDS):
+            if user_id not in delivered:
+                try:
+                    await application.bot.send_message(chat_id=user_id, text=text)
+                except Exception as e:
+                    logger.error(f"Failed to send auto result to user {user_id}: {e}")
+            try:
+                await application.bot.send_document(
+                    chat_id=user_id,
+                    document=file_content,
+                    filename=output_filename,
+                    caption=caption,
+                )
+                logger.info(f"User {user_id} received auto parse result for job {job_id}")
+            except Exception as e:
+                logger.error(f"Failed to send auto file to user {user_id}: {e}")
+        return
+
+    for user_id in sorted(ALLOWED_USER_IDS):
+        if user_id in delivered:
+            continue
+        try:
+            await application.bot.send_message(chat_id=user_id, text=text)
+        except Exception as e:
+            logger.error(f"Failed to send auto result to user {user_id}: {e}")
+
+
+async def consume_pending_results(application: Application, r) -> None:
+    try:
+        claimed = await r.xautoclaim(
+            RESULTS_STREAM,
+            CONSUMER_GROUP,
+            'bot-consumer',
+            min_idle_time=0,
+            start_id='0-0',
+            count=50,
+        )
+    except Exception as e:
+        logger.warning(f"Could not claim pending results: {e}")
+        return
+
+    messages = claimed[1] if claimed and len(claimed) > 1 else []
+    for message_id, data in messages:
+        try:
+            await process_result(application, data)
+            await r.xack(RESULTS_STREAM, CONSUMER_GROUP, message_id)
+        except Exception as e:
+            logger.error(f"Error processing pending result: {e}")
+
+
+async def run_auto_parse(application: Application, run_day: date) -> None:
+    target = run_day - timedelta(days=1)
+    date_str = target.strftime('%d.%m.%Y')
+    deadline = datetime(
+        run_day.year, run_day.month, run_day.day, AUTO_PARSE_CATCHUP_HOUR, 0, tzinfo=MSK
+    )
+
+    if not AUTO_PARSE_FILE.is_file():
+        logger.error(f"Auto parse file not found: {AUTO_PARSE_FILE}")
+        await set_auto_marker(run_day, 'missing_file')
+        await broadcast_text(
+            application,
+            "❌ Автоматический расчет не запущен.\n\n"
+            f"Положите Excel-шаблон в templates/{AUTO_PARSE_FILE.name} в репозитории."
+        )
+        return
+
+    job_id = None
+    while msk_now() < deadline:
+        if await is_job_running():
+            logger.info("Auto parse is waiting for the current job to finish")
+            await asyncio.sleep(30)
+            continue
+        candidate = str(uuid.uuid4())
+        if await acquire_job_lock(candidate):
+            job_id = candidate
+            break
+        await asyncio.sleep(5)
+
+    if job_id is None:
+        logger.warning("Auto parse skipped because the parser stayed busy")
+        await set_auto_marker(run_day, 'busy')
+        await broadcast_text(
+            application,
+            f"❌ Автоматический расчет за {date_str} не запущен: "
+            f"до {AUTO_PARSE_CATCHUP_HOUR}:00 парсер был занят другим расчетом."
+        )
+        return
+
+    enqueued = False
+    try:
+        file_content = AUTO_PARSE_FILE.read_bytes()
+        filename = AUTO_PARSE_FILE.name
+        r = await get_redis()
+        await r.xadd(JOBS_STREAM, {
+            'job_id': job_id,
+            'user_id': str(min(ALLOWED_USER_IDS)),
+            'filename': filename,
+            'date': date_str,
+            'file_content': file_content.hex(),
+            'pace': 'slow',
+            'broadcast': '1',
+        })
+        enqueued = True
+        await set_auto_marker(run_day, job_id)
+        meta_key = f'{AUTO_META_PREFIX}{job_id}'
+        notify_key = f'{AUTO_NOTIFY_PREFIX}{job_id}'
+        await r.hset(meta_key, mapping={'filename': filename, 'date': date_str})
+        await r.expire(meta_key, AUTO_KEY_TTL)
+        await r.set(AUTO_ACTIVE_KEY, job_id, ex=AUTO_KEY_TTL)
+        text = format_progress_text(filename, date_str=date_str, limit_text='все строки', auto=True)
+        for user_id in sorted(ALLOWED_USER_IDS):
+            try:
+                sent = await application.bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    reply_markup=cancel_job_markup(job_id),
+                )
+                await r.hset(notify_key, str(user_id), str(sent.message_id))
+            except Exception as e:
+                logger.error(f"Failed to send auto parse start to user {user_id}: {e}")
+        await r.expire(notify_key, AUTO_KEY_TTL)
+        application.bot_data.setdefault('auto_progress_text', {})[job_id] = text
+        logger.info(f"Auto parse started: date={date_str}, job_id={job_id}, file={filename}")
+    except Exception:
+        if not enqueued:
+            await release_job_lock(job_id)
+        raise
+
+
+async def auto_parse_loop(application: Application) -> None:
+    if not ALLOWED_USER_IDS:
+        logger.warning("Auto parse disabled: ALLOWED_USER_IDS is empty")
+        return
+
+    logger.info(
+        f"Auto parse enabled: daily at {AUTO_PARSE_HOUR:02d}:00 MSK, "
+        f"file {AUTO_PARSE_FILE}, recipients {len(ALLOWED_USER_IDS)}"
+    )
+    while True:
+        try:
+            now = msk_now()
+            if in_auto_window(now) and not await auto_marker(now.date()):
+                await run_auto_parse(application, now.date())
+                continue
+            nxt = upcoming_auto_slot(msk_now())
+            wait = max(1.0, (nxt - msk_now()).total_seconds())
+            logger.info(f"Next auto parse at {nxt.strftime('%d.%m.%Y %H:%M')} MSK")
+            await asyncio.sleep(wait)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Auto parse loop error")
+            await asyncio.sleep(60)
 
 
 async def post_init(application: Application):
     asyncio.create_task(listen_for_results(application))
     asyncio.create_task(listen_for_progress(application))
+    asyncio.create_task(auto_parse_loop(application))
 
 
 def main():

@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import json
 import os
+import random
 import re
 import logging
 from datetime import datetime, timedelta, timezone
@@ -70,10 +71,31 @@ _semaphore: asyncio.Semaphore | None = None
 _proxy_in_use: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "investing_proxy", default=None
 )
+_request_gap: contextvars.ContextVar[tuple[float, float] | None] = contextvars.ContextVar(
+    "investing_request_gap", default=None
+)
 
 
 class RetryableInvestingError(Exception):
     pass
+
+
+def push_investing_request_gap(min_seconds: float, max_seconds: float):
+    return _request_gap.set((min_seconds, max_seconds))
+
+
+def pop_investing_request_gap(token) -> None:
+    _request_gap.reset(token)
+
+
+async def _gap_before_next_investing_request(default_seconds: float) -> None:
+    gap = _request_gap.get()
+    if gap is None:
+        await asyncio.sleep(default_seconds)
+        return
+    delay = random.uniform(gap[0], gap[1])
+    logger.info(f"Slow pace: waiting {delay:.0f}s before the next Investing request")
+    await asyncio.sleep(delay)
 
 
 class _ProxyPool:
@@ -238,16 +260,47 @@ def _is_proxy_refusal(exc: Exception) -> bool:
     return "HTTP 429" in text or "HTTP 403" in text
 
 
+def _is_transport_failure(exc: Exception) -> bool:
+    if isinstance(exc, RetryableInvestingError):
+        return False
+    text = str(exc).lower()
+    name = type(exc).__name__.lower()
+    if any(token in name for token in ("timeout", "connection", "connecterror", "network", "proxy")):
+        return True
+    return "timed out" in text or "curl: (" in text
+
+
 async def _retry(action, *, what: str, extra: str = ""):
     attempt = 0
     cooldown_round = 0
     refused: set[str] = set()
+    unreachable: set[str] = set()
     while True:
         try:
             return await action()
         except Exception as e:
             suffix = f" {extra}" if extra else ""
             failed_proxy = _proxy_in_use.get()
+            if (
+                _is_transport_failure(e)
+                and len(_PROXIES) > 1
+                and failed_proxy in _PROXIES
+            ):
+                unreachable.add(failed_proxy)
+                new_proxy = await _pool.rotate_if_current(failed_proxy)
+                if len(unreachable) < len(_PROXIES):
+                    if new_proxy:
+                        logger.warning(
+                            f"Investing {what} error: {e}. "
+                            f"Switching proxy {_proxy_label(failed_proxy)} -> "
+                            f"{_proxy_label(new_proxy)}.{suffix}"
+                        )
+                    continue
+                logger.error(
+                    f"Investing {what} failed, all {len(_PROXIES)} proxies "
+                    f"failed to connect: {e}.{suffix}"
+                )
+                raise
             if (
                 _is_proxy_refusal(e)
                 and len(_PROXIES) > 1
@@ -414,7 +467,7 @@ async def get_investing_price_async(stock_url: str, target_date: str) -> float |
             page_fetched = stock_url not in STOCK_ID_CACHE
             stock_id = await _load_stock_id(session, stock_url)
             if page_fetched:
-                await asyncio.sleep(0.3)
+                await _gap_before_next_investing_request(0.3)
             results = await _load_stock_data(
                 session, stock_id, start_date, target_date, stock_url
             )

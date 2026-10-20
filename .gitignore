@@ -16,6 +16,7 @@ ENV/
 *.xls
 !quotations_template.xlsx
 !quotations_template_lite.xlsx
+!templates/quotations_template.xlsx
 !tests/fixtures/*.xlsx
 
 # Tests

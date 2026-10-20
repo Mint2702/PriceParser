@@ -3,6 +3,8 @@ import os
 import sys
 import asyncio
 import logging
+import random
+import time
 import redis.asyncio as redis
 from pathlib import Path
 from datetime import datetime
@@ -11,7 +13,12 @@ import openpyxl
 import xml.etree.ElementTree as ET
 from curl_cffi.requests import AsyncSession
 
-from async_impl import parse_moex_stock_async, get_investing_price_async
+from async_impl import (
+    parse_moex_stock_async,
+    get_investing_price_async,
+    pop_investing_request_gap,
+    push_investing_request_gap,
+)
 
 
 logging.basicConfig(
@@ -37,6 +44,10 @@ PROGRESS_KEY_TTL = 7200
 CANCEL_KEY_PREFIX = 'parser:cancel:'
 CONSUMER_GROUP = 'parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 5))
+JOB_LOCK_KEY = 'parser:job_lock'
+JOB_LOCK_TTL = 7200
+SLOW_DELAY_MIN = float(os.getenv('SLOW_DELAY_MIN', '30'))
+SLOW_DELAY_MAX = float(os.getenv('SLOW_DELAY_MAX', '90'))
 
 redis_client = None
 
@@ -73,8 +84,34 @@ async def publish_progress(
         key = f'{PROGRESS_KEY_PREFIX}{job_id}'
         await r.hset(key, mapping=mapping)
         await r.expire(key, PROGRESS_KEY_TTL)
+        await touch_job_lock(job_id)
     except Exception as e:
         logger.warning(f"Failed to publish progress for job {job_id}: {e}")
+
+
+async def touch_job_lock(job_id: str) -> None:
+    try:
+        r = await get_redis()
+        current = await r.get(JOB_LOCK_KEY)
+        if current == job_id:
+            await r.expire(JOB_LOCK_KEY, JOB_LOCK_TTL)
+    except Exception as e:
+        logger.warning(f"Failed to refresh job lock for {job_id}: {e}")
+
+
+async def pause_between_requests(job_id: str | None, should_cancel) -> None:
+    delay = random.uniform(SLOW_DELAY_MIN, SLOW_DELAY_MAX)
+    logger.info(f"Slow pace: waiting {delay:.0f}s before the next request")
+    deadline = time.monotonic() + delay
+    while True:
+        if job_id:
+            await touch_job_lock(job_id)
+        if should_cancel and await should_cancel():
+            raise JobCancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(5.0, remaining))
 
 
 async def is_job_cancelled(job_id: str) -> bool:
@@ -135,16 +172,35 @@ async def get_usd_rate_from_cbr(date: datetime) -> float | None:
         return None
 
 
-async def process_single_stock_async(row_num: int, stock_name: str, ticker: str, investing_url: str, 
-                                    target_date: str, index: int):
+async def process_single_stock_async(
+    row_num: int,
+    stock_name: str,
+    ticker: str,
+    investing_url: str,
+    target_date: str,
+    index: int,
+    slow: bool = False,
+    job_id: str | None = None,
+    should_cancel=None,
+    request_state: dict | None = None,
+):
     moex_price = None
     num_trades = None
     volume = None
     investing_price = None
     investing_error = False
-    
+
+    async def before_request() -> None:
+        if not slow:
+            return
+        if request_state is not None and request_state.get('started'):
+            await pause_between_requests(job_id, should_cancel)
+        if request_state is not None:
+            request_state['started'] = True
+
     if ticker:
         try:
+            await before_request()
             results = await parse_moex_stock_async(ticker, target_date)
             if results:
                 for entry in results:
@@ -153,12 +209,17 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
                         num_trades = entry.get('num_trades')
                         volume = entry.get('volume')
                         break
+        except JobCancelled:
+            raise
         except Exception as e:
             logger.error(f"  [{index}] {stock_name} - MOEX error: {e}")
     
     if investing_url and moex_price is not None:
         try:
+            await before_request()
             investing_price = await get_investing_price_async(investing_url, target_date)
+        except JobCancelled:
+            raise
         except Exception as e:
             investing_error = True
             logger.error(f"  [{index}] {stock_name} - Investing.com error: {e}")
@@ -166,11 +227,14 @@ async def process_single_stock_async(row_num: int, stock_name: str, ticker: str,
     return row_num, stock_name, ticker, moex_price, num_trades, volume, investing_price, investing_error
 
 
-async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None, on_progress=None, should_cancel=None) -> tuple[bytes, str]:
+async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: bool = False, limit: int | None = None, on_progress=None, should_cancel=None, slow: bool = False, job_id: str | None = None) -> tuple[bytes, str]:
     temp_input = Path(f"/tmp/input_{os.getpid()}.xlsx")
     temp_output = Path(f"/tmp/output_{os.getpid()}.xlsx")
+    gap_token = None
     
     try:
+        if slow:
+            gap_token = push_investing_request_gap(SLOW_DELAY_MIN, SLOW_DELAY_MAX)
         temp_input.write_bytes(file_content)
         
         logger.info(f"Loading Excel file...")
@@ -231,8 +295,15 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         error_count = 0
         
         mode_str = "REPARSE (ERROR rows only)" if reparse_mode else "FULL"
+        batch_size = 1 if slow else BATCH_SIZE
         logger.info(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')} [Mode: {mode_str}]")
-        logger.info(f"Using batch size: {BATCH_SIZE} concurrent requests")
+        if slow:
+            logger.info(
+                f"Slow pace: one request at a time, "
+                f"{SLOW_DELAY_MIN:.0f}-{SLOW_DELAY_MAX:.0f}s between requests"
+            )
+        else:
+            logger.info(f"Using batch size: {batch_size} concurrent requests")
         logger.info("-" * 80)
 
         async def check_cancelled():
@@ -252,12 +323,14 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
 
         await check_cancelled()
         
-        for batch_start in range(0, total_rows, BATCH_SIZE):
+        request_state = {'started': False}
+        batch_count = (total_rows + batch_size - 1) // batch_size if total_rows else 0
+        for batch_start in range(0, total_rows, batch_size):
             await check_cancelled()
-            batch_end = min(batch_start + BATCH_SIZE, total_rows)
+            batch_end = min(batch_start + batch_size, total_rows)
             batch = stocks_data[batch_start:batch_end]
             
-            logger.info(f"\nProcessing batch {batch_start//BATCH_SIZE + 1}/{(total_rows + BATCH_SIZE - 1)//BATCH_SIZE} "
+            logger.info(f"\nProcessing batch {batch_start//batch_size + 1}/{batch_count} "
                   f"(stocks {batch_start + 1}-{batch_end})...")
             
             tasks = [
@@ -267,7 +340,11 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
                     stock['ticker'],
                     stock['investing_url'],
                     target_date,
-                    batch_start + i + 1
+                    batch_start + i + 1,
+                    slow=slow,
+                    job_id=job_id,
+                    should_cancel=should_cancel,
+                    request_state=request_state,
                 )
                 for i, stock in enumerate(batch)
             ]
@@ -275,6 +352,8 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             for i, result in enumerate(results):
+                if isinstance(result, JobCancelled):
+                    raise result
                 if isinstance(result, Exception):
                     logger.error(f"  [{batch_start + i + 1}] Error: {result}")
                     continue
@@ -313,7 +392,8 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
             if on_progress:
                 await on_progress(batch_end, total_rows)
             
-            await asyncio.sleep(0.3)
+            if not slow:
+                await asyncio.sleep(0.3)
         
         await check_cancelled()
         logger.info("\n" + "=" * 80)
@@ -335,6 +415,8 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         return result_content, summary
     
     finally:
+        if gap_token is not None:
+            pop_investing_request_gap(gap_token)
         temp_input.unlink(missing_ok=True)
         temp_output.unlink(missing_ok=True)
 
@@ -371,6 +453,8 @@ async def process_job(job_data: dict):
 
     limit_str = job_data.get('limit')
     limit = int(limit_str) if limit_str else None
+    slow = job_data.get('pace') == 'slow'
+    broadcast = job_data.get('broadcast') == '1'
 
     logger.info(f"\n{'='*80}")
     logger.info(f"📋 Processing job: {job_id}")
@@ -379,6 +463,7 @@ async def process_job(job_data: dict):
     logger.info(f"📅 Date: {date_str}")
     logger.info(f"🔄 Mode: {'REPARSE (ERROR rows only)' if reparse_mode else 'FULL'}")
     logger.info(f"📋 Limit: {limit if limit is not None else 'all rows'}")
+    logger.info(f"🐢 Pace: {'slow' if slow else 'normal'}")
     logger.info(f"{'='*80}\n")
 
     await publish_progress(job_id, user_id, date_str=date_str)
@@ -397,6 +482,8 @@ async def process_job(job_data: dict):
             limit,
             on_progress=on_progress,
             should_cancel=should_cancel,
+            slow=slow,
+            job_id=job_id,
         )
 
         if await is_job_cancelled(job_id):
@@ -412,6 +499,8 @@ async def process_job(job_data: dict):
             'summary': summary,
             'date': date_str,
         }
+        if broadcast:
+            result_data['broadcast'] = '1'
         
         await r.xadd(RESULTS_STREAM, result_data)
         logger.info(f"\n✅ Job {job_id} completed successfully!")
@@ -419,12 +508,15 @@ async def process_job(job_data: dict):
     except JobCancelled:
         logger.info(f"\n⏹ Job {job_id} cancelled")
         r = await get_redis()
-        await r.xadd(RESULTS_STREAM, {
+        cancelled_data = {
             'job_id': job_id,
             'user_id': user_id,
             'status': 'cancelled',
             'date': date_str,
-        })
+        }
+        if broadcast:
+            cancelled_data['broadcast'] = '1'
+        await r.xadd(RESULTS_STREAM, cancelled_data)
     
     except Exception as e:
         logger.error(f"\n❌ Job {job_id} failed with error: {e}")
@@ -438,8 +530,35 @@ async def process_job(job_data: dict):
             'error': str(e),
             'date': date_str,
         }
+        if broadcast:
+            error_data['broadcast'] = '1'
         
         await r.xadd(RESULTS_STREAM, error_data)
+
+
+async def recover_pending_jobs(r) -> None:
+    try:
+        claimed = await r.xautoclaim(
+            JOBS_STREAM,
+            CONSUMER_GROUP,
+            f'worker-{os.getpid()}',
+            min_idle_time=5000,
+            start_id='0-0',
+            count=1,
+        )
+    except Exception as e:
+        logger.warning(f"Could not claim pending jobs: {e}")
+        return
+
+    messages = claimed[1] if claimed and len(claimed) > 1 else []
+    for message_id, job_data in messages:
+        logger.info(f"Resuming pending job {job_data.get('job_id')}")
+        try:
+            await process_job(job_data)
+            await r.xack(JOBS_STREAM, CONSUMER_GROUP, message_id)
+        except Exception as e:
+            logger.error(f"Error processing pending job: {e}")
+            traceback.print_exc()
 
 
 async def main():
@@ -458,6 +577,8 @@ async def main():
     logger.info(f"👂 Listening for jobs on stream: {JOBS_STREAM}")
     logger.info(f"🔧 Batch size: {BATCH_SIZE}")
     logger.info(f"{'='*80}\n")
+
+    await recover_pending_jobs(r)
     
     while True:
         try:

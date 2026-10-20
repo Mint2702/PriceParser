@@ -256,16 +256,47 @@ def _is_proxy_refusal(exc: Exception) -> bool:
     return "HTTP 429" in text or "HTTP 403" in text
 
 
+def _is_transport_failure(exc: Exception) -> bool:
+    if isinstance(exc, RetryableInvestingError):
+        return False
+    text = str(exc).lower()
+    name = type(exc).__name__.lower()
+    if any(token in name for token in ("timeout", "connection", "connecterror", "network", "proxy")):
+        return True
+    return "timed out" in text or "curl: (" in text
+
+
 async def _retry(action, *, what: str, extra: str = ""):
     attempt = 0
     cooldown_round = 0
     refused: set[str] = set()
+    unreachable: set[str] = set()
     while True:
         try:
             return await action()
         except Exception as e:
             suffix = f" {extra}" if extra else ""
             failed_proxy = _proxy_in_use.get()
+            if (
+                _is_transport_failure(e)
+                and len(_PROXIES) > 1
+                and failed_proxy in _PROXIES
+            ):
+                unreachable.add(failed_proxy)
+                new_proxy = await _pool.rotate_if_current(failed_proxy)
+                if len(unreachable) < len(_PROXIES):
+                    if new_proxy:
+                        logger.warning(
+                            f"Investing {what} error: {e}. "
+                            f"Switching proxy {_proxy_label(failed_proxy)} -> "
+                            f"{_proxy_label(new_proxy)}.{suffix}"
+                        )
+                    continue
+                logger.error(
+                    f"Investing {what} failed, all {len(_PROXIES)} proxies "
+                    f"failed to connect: {e}.{suffix}"
+                )
+                raise
             if (
                 _is_proxy_refusal(e)
                 and len(_PROXIES) > 1
