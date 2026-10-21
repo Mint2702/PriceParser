@@ -46,8 +46,9 @@ CONSUMER_GROUP = 'parser_service'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 5))
 JOB_LOCK_KEY = 'parser:job_lock'
 JOB_LOCK_TTL = 7200
-SLOW_DELAY_MIN = float(os.getenv('SLOW_DELAY_MIN', '30'))
-SLOW_DELAY_MAX = float(os.getenv('SLOW_DELAY_MAX', '90'))
+SLOW_BUDGET_SECONDS = float(os.getenv('SLOW_BUDGET_SECONDS', str(5 * 60 * 60)))
+SLOW_REQUEST_SECONDS = 3.0
+SLOW_GAP_FLOOR = 1.0
 
 redis_client = None
 
@@ -99,9 +100,31 @@ async def touch_job_lock(job_id: str) -> None:
         logger.warning(f"Failed to refresh job lock for {job_id}: {e}")
 
 
-async def pause_between_requests(job_id: str | None, should_cancel) -> None:
-    delay = random.uniform(SLOW_DELAY_MIN, SLOW_DELAY_MAX)
-    logger.info(f"Slow pace: waiting {delay:.0f}s before the next request")
+def estimate_slow_requests(stocks_data: list[dict]) -> int:
+    count = 0
+    for stock in stocks_data:
+        if stock.get('ticker'):
+            count += 1
+        if stock.get('investing_url'):
+            count += 2
+    return count
+
+
+def slow_pause_bounds(request_count: int) -> tuple[float, float]:
+    gaps = max(1, request_count - 1)
+    pause_budget = SLOW_BUDGET_SECONDS - request_count * SLOW_REQUEST_SECONDS
+    max_gap = pause_budget / gaps if pause_budget > 0 else 0.0
+    if max_gap < SLOW_GAP_FLOOR:
+        logger.warning(
+            f"Slow budget {SLOW_BUDGET_SECONDS:.0f}s is tight for {request_count} requests"
+        )
+        return SLOW_GAP_FLOOR, SLOW_GAP_FLOOR
+    return max_gap * 0.75, max_gap
+
+
+async def pause_between_requests(job_id: str | None, should_cancel, gap: tuple[float, float]) -> None:
+    delay = random.uniform(gap[0], gap[1])
+    logger.info(f"Slow pace: waiting {delay:.1f}s before the next request")
     deadline = time.monotonic() + delay
     while True:
         if job_id:
@@ -194,7 +217,7 @@ async def process_single_stock_async(
         if not slow:
             return
         if request_state is not None and request_state.get('started'):
-            await pause_between_requests(job_id, should_cancel)
+            await pause_between_requests(job_id, should_cancel, request_state['gap'])
         if request_state is not None:
             request_state['started'] = True
 
@@ -233,8 +256,6 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
     gap_token = None
     
     try:
-        if slow:
-            gap_token = push_investing_request_gap(SLOW_DELAY_MIN, SLOW_DELAY_MAX)
         temp_input.write_bytes(file_content)
         
         logger.info(f"Loading Excel file...")
@@ -296,11 +317,16 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
         
         mode_str = "REPARSE (ERROR rows only)" if reparse_mode else "FULL"
         batch_size = 1 if slow else BATCH_SIZE
+        slow_gap = None
         logger.info(f"\nProcessing {total_rows} stocks for date: {date.strftime('%d.%m.%Y')} [Mode: {mode_str}]")
         if slow:
+            request_count = estimate_slow_requests(stocks_data)
+            slow_gap = slow_pause_bounds(request_count)
+            gap_token = push_investing_request_gap(slow_gap[0], slow_gap[1])
             logger.info(
                 f"Slow pace: one request at a time, "
-                f"{SLOW_DELAY_MIN:.0f}-{SLOW_DELAY_MAX:.0f}s between requests"
+                f"{slow_gap[0]:.1f}-{slow_gap[1]:.1f}s between requests "
+                f"({request_count} requests, budget {SLOW_BUDGET_SECONDS / 3600:.0f}h)"
             )
         else:
             logger.info(f"Using batch size: {batch_size} concurrent requests")
@@ -323,7 +349,7 @@ async def process_excel_file(file_content: bytes, date: datetime, reparse_mode: 
 
         await check_cancelled()
         
-        request_state = {'started': False}
+        request_state = {'started': False, 'gap': slow_gap}
         batch_count = (total_rows + batch_size - 1) // batch_size if total_rows else 0
         for batch_start in range(0, total_rows, batch_size):
             await check_cancelled()
