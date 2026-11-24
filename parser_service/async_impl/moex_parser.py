@@ -2,9 +2,19 @@ import json
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from curl_cffi.requests import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+_MOEX_CA_BUNDLE = str(
+    Path(__file__).resolve().parent.parent / "certs" / "russian_trusted_root_ca.pem"
+)
+
+
+def _is_ssl_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "ssl certificate" in text or "certificate verify failed" in text
 
 
 async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
@@ -19,7 +29,7 @@ async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
     
     for attempt in range(max_retries):
         try:
-            async with AsyncSession() as client:
+            async with AsyncSession(verify=_MOEX_CA_BUNDLE) as client:
                 response = await client.get(
                     url, 
                     timeout=30, 
@@ -50,6 +60,9 @@ async def parse_moex_stock_async(ticker: str, target_date: str) -> list[dict]:
                 return results
                 
         except Exception as e:
+            if _is_ssl_error(e):
+                logger.error(f"MOEX parser SSL error: {e}")
+                raise
             if attempt < max_retries - 1:
                 delay = retry_delays[attempt]
                 logger.warning(f"MOEX parser error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")

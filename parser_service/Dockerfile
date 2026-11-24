@@ -14,6 +14,7 @@ COPY __init__.py .
 COPY parser_worker.py .
 COPY async_impl/ async_impl/
 COPY sync/ sync/
+COPY certs/ certs/
 
 CMD ["python", "parser_worker.py"]
 
